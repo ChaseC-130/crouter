@@ -46,6 +46,7 @@ const tasks = [];
 let lastUpdate;
 let lastChat;
 let lastCreate;
+const contextCalls = [];
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 const snapshot = () => ({
@@ -56,10 +57,10 @@ const snapshot = () => ({
   config: {
     routingProvider: "jev",
     routingConfigured: true,
-    demo: true,
+    demo: false,
     projectPathBase: "/synthetic",
     routingPreferences: {
-      enabledModels: [],
+      enabledModels: [{ provider: "codex", model: "synthetic-model" }],
       usageAware: false,
       minRemainingPercent: 20,
       instructions: "",
@@ -76,6 +77,20 @@ await page.route("**/api/**", async (route) => {
   const url = new URL(route.request().url());
   if (url.pathname === "/api/snapshot")
     return route.fulfill({ json: snapshot() });
+  if (url.pathname === "/api/projects/context") {
+    const input = route.request().postDataJSON();
+    contextCalls.push(input);
+    const project = projects.find((p) => p.id === input.projectId);
+    if (contextCalls.length === 1) {
+      project.contextStatus = "error";
+      project.contextError = "Synthetic setup failure. Retry automatic setup.";
+    } else {
+      project.description = `${project.name} supports strategy battles, tiered units and balance audits.`;
+      project.contextStatus = "ready";
+      project.contextError = "";
+    }
+    return route.fulfill({ json: { project } });
+  }
   if (url.pathname === "/api/projects" && route.request().method() === "GET")
     return route.fulfill({
       json: { path: "/synthetic/tools", base: "/synthetic" },
@@ -124,7 +139,12 @@ await page.route("**/api/**", async (route) => {
 });
 try {
   await page.goto(process.env.CROUTER_UI_URL || "http://127.0.0.1:3000");
-  await page.getByRole("button", { name: "Set up Tactics" }).waitFor();
+  await page.getByRole("button", { name: "Retry Tactics" }).waitFor();
+  assert.deepEqual(contextCalls, [{ projectId: gameId }]);
+  await page.getByRole("button", { name: "Retry Tactics" }).click();
+  await page.locator(".project-context-prompt").waitFor({ state: "hidden" });
+  assert.equal(contextCalls[1].retry, true);
+  assert.equal(projects[1].description, "Invoices and payment processing");
   const chat = await page
     .getByRole("region", { name: "Conversation", exact: true })
     .boundingBox();
@@ -160,22 +180,31 @@ try {
   await page
     .getByRole("button", { name: "Show task dashboard", exact: true })
     .click();
-  await page.getByRole("button", { name: "Set up Tactics" }).click();
+  await page
+    .getByRole("button", { name: "Project settings for Tactics" })
+    .click();
   assert.equal(
     await page.getByLabel("Project path on host").getAttribute("readonly"),
     "",
   );
   const description =
     "A strategy game with unit tiers, combat roles, upgrades and balance audits. Units in the same tier should be distinct; upgrades should preserve tradeoffs with native tier peers.";
+  assert.equal(
+    await page
+      .getByLabel("Project context", { exact: true })
+      .getAttribute("required"),
+    null,
+  );
+  assert.match(
+    await page.getByLabel("Project context", { exact: true }).inputValue(),
+    /strategy battles/,
+  );
   await page.getByLabel("Project context", { exact: true }).fill(description);
   await page.getByRole("button", { name: "Save project", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
   assert.equal(lastUpdate.id, gameId);
   assert.equal(lastUpdate.description, description);
   assert.ok(!("path" in lastUpdate));
-  await page
-    .getByRole("button", { name: "Set up Tactics" })
-    .waitFor({ state: "hidden" });
   await page
     .getByRole("button", { name: "Project settings for Tactics" })
     .click();
@@ -210,15 +239,15 @@ try {
     .getByLabel("Project path on host", { exact: true })
     .fill("../tools");
   await page
-    .getByLabel("Project context", { exact: true })
-    .fill("Developer tools and automation workflows.");
-  await page
     .getByRole("button", { name: "Connect project", exact: true })
     .click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
-  assert.equal(
-    lastCreate.description,
-    "Developer tools and automation workflows.",
+  assert.equal(lastCreate.description, "");
+  await page.locator(".project-context-prompt").waitFor({ state: "hidden" });
+  assert.ok(
+    contextCalls.some(
+      (c) => c.projectId === "33333333-3333-4333-8333-333333333333",
+    ),
   );
   await page
     .getByLabel("Project for this message")

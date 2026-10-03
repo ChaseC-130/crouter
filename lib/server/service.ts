@@ -119,12 +119,14 @@ export async function registerProject(
       path: root,
       aliases,
       description,
+      contextStatus: description.trim() ? "ready" : "pending",
+      contextError: "",
       createdAt: new Date().toISOString(),
     };
     await orchestrate(p, { operation: "initialize" });
     db()
       .prepare(
-        "INSERT INTO projects (id, name, path, aliases, createdAt, description) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO projects (id, name, path, aliases, createdAt, description, contextStatus) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         p.id,
@@ -133,6 +135,7 @@ export async function registerProject(
         JSON.stringify(p.aliases),
         p.createdAt,
         description,
+        p.contextStatus!,
       );
     return { project: p };
   });
@@ -160,9 +163,15 @@ export async function updateProjectDetails(
       throw new AppError("Project names and aliases must be unique.");
     db()
       .prepare(
-        "UPDATE projects SET name=?, aliases=?, description=? WHERE id=?",
+        "UPDATE projects SET name=?, aliases=?, description=?, contextStatus=?, contextError='' WHERE id=?",
       )
-      .run(name, JSON.stringify(aliases), description, id);
+      .run(
+        name,
+        JSON.stringify(aliases),
+        description,
+        description.trim() ? "ready" : "pending",
+        id,
+      );
     return { project: project(id) };
   });
 }

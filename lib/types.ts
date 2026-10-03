@@ -64,6 +64,8 @@ export interface Project {
   path: string;
   aliases: string[];
   description?: string;
+  contextStatus?: "pending" | "generating" | "ready" | "error";
+  contextError?: string;
   createdAt: string;
 }
 export interface Task {

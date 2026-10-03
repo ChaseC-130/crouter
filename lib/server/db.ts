@@ -27,6 +27,18 @@ export function db() {
     database.exec(
       "ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     );
+  if (!columns.some((column) => column.name === "contextStatus")) {
+    database.exec(
+      "ALTER TABLE projects ADD COLUMN contextStatus TEXT NOT NULL DEFAULT 'pending'",
+    );
+    database.exec(
+      "UPDATE projects SET contextStatus='ready' WHERE trim(description)<>''",
+    );
+  }
+  if (!columns.some((column) => column.name === "contextError"))
+    database.exec(
+      "ALTER TABLE projects ADD COLUMN contextError TEXT NOT NULL DEFAULT ''",
+    );
   return database;
 }
 export function projects(): Project[] {
@@ -34,7 +46,15 @@ export function projects(): Project[] {
     db()
       .prepare("SELECT * FROM projects ORDER BY createdAt")
       .all() as unknown as (Omit<Project, "aliases"> & { aliases: string })[]
-  ).map((p) => ({ ...p, aliases: JSON.parse(p.aliases) }));
+  ).map((p) => ({
+    ...p,
+    aliases: JSON.parse(p.aliases),
+    // An interrupted host process must not leave setup stuck forever.
+    contextStatus:
+      p.contextStatus === "generating" && !hasLease(`context:${p.id}`)
+        ? "pending"
+        : p.contextStatus,
+  }));
 }
 export function project(id: string) {
   if (id === GENERAL_WORKSPACE_ID) return generalWorkspace();

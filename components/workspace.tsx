@@ -228,6 +228,7 @@ export function Workspace() {
   const pendingPreferences = useRef(0);
   const preferenceRevision = useRef(0);
   const providerRequest = useRef(false);
+  const contextRequests = useRef(new Map<string, number>());
   const bottom = useRef<HTMLDivElement>(null),
     textArea = useRef<HTMLTextAreaElement>(null);
   const latestMessageId = snapshot?.messages.at(-1)?.id;
@@ -262,6 +263,30 @@ export function Workspace() {
       clearInterval(interval);
     };
   }, [refresh]);
+  useEffect(() => {
+    if (
+      !snapshot?.config.routingConfigured ||
+      !snapshot.config.routingPreferences.enabledModels.length
+    )
+      return;
+    // Backfill existing projects one at a time. The host also guards every job with a lease.
+    for (const p of snapshot.projects)
+      if (p.contextStatus === "generating")
+        contextRequests.current.delete(p.id);
+    if (snapshot.projects.some((p) => p.contextStatus === "generating")) return;
+    const pending = snapshot.projects.find(
+      (p) =>
+        p.kind !== "general" &&
+        !p.description?.trim() &&
+        p.contextStatus !== "error" &&
+        Date.now() - (contextRequests.current.get(p.id) || 0) > 30000,
+    );
+    if (!pending) return;
+    contextRequests.current.set(pending.id, Date.now());
+    void api("/api/projects/context", { projectId: pending.id })
+      .then(() => refresh())
+      .catch((e) => setError((e as Error).message));
+  }, [snapshot, refresh]);
   useEffect(() => {
     // assistant-ui adopts external messages in an effect; scroll after its next paint.
     let frame = requestAnimationFrame(() => {
@@ -378,9 +403,11 @@ export function Workspace() {
       setProjectPath("");
       setAliases("");
       setNotice(
-        editingProject
-          ? "Project context saved. Routing uses it on your next request."
-          : "Project connected with context for routing.",
+        !description.trim()
+          ? "Project saved. Routing context is generated automatically."
+          : editingProject
+            ? "Project context saved. Routing uses it on your next request."
+            : "Project connected with context for routing.",
       );
       await refresh();
     } catch (e) {
@@ -748,21 +775,39 @@ export function Workspace() {
             projects.some((p) => !p.description?.trim()) && (
               <div className="project-context-prompt">
                 <span>
-                  <strong>Help {routingName} recognize your projects.</strong>{" "}
-                  Add context for automatic routing.
+                  <strong>Automatic project context.</strong>{" "}
+                  {snapshot?.config.routingConfigured &&
+                  preferences.enabledModels.length
+                    ? `${routingName} selects an enabled model to draft missing context.`
+                    : "Configure the router and enable a model in Host & usage to start setup."}
                 </span>
                 <div>
                   {projects
                     .filter((p) => !p.description?.trim())
                     .map((p) => (
-                      <button
-                        className="text-button"
-                        key={p.id}
-                        onClick={() => showProjectEditor(p)}
-                      >
-                        Set up {p.name}
-                        <ArrowRight size={12} />
-                      </button>
+                      <span key={p.id} title={p.contextError}>
+                        {p.name}:{" "}
+                        {p.contextStatus === "error"
+                          ? p.contextError || "setup failed"
+                          : p.contextStatus === "generating"
+                            ? "generating…"
+                            : "waiting"}
+                        {p.contextStatus === "error" && (
+                          <button
+                            className="text-button"
+                            onClick={() => {
+                              void api("/api/projects/context", {
+                                projectId: p.id,
+                                retry: true,
+                              })
+                                .then(() => refresh())
+                                .catch((e) => setError((e as Error).message));
+                            }}
+                          >
+                            Retry {p.name}
+                          </button>
+                        )}
+                      </span>
                     ))}
                 </div>
               </div>
@@ -1194,8 +1239,9 @@ export function Workspace() {
         >
           <form onSubmit={addProject}>
             <p className="modal-description">
-              Describe the project so {routingName} can recognize requests about
-              it without needing its name in every message.
+              {routingName} selects an enabled model to draft routing context
+              automatically from the project README and metadata. You can edit
+              it here.
             </p>
             <label className="form-label">
               Project name
@@ -1241,10 +1287,9 @@ export function Workspace() {
               />
             </label>
             <label className="form-label">
-              Project context
+              Project context <span>optional, generated automatically</span>
               <textarea
                 aria-label="Project context"
-                required
                 maxLength={1500}
                 rows={5}
                 value={description}
