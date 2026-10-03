@@ -1,0 +1,48 @@
+{
+  "name": "crouter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first, stateless multi-project agent router",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev --webpack --hostname 127.0.0.1",
+    "build": "next build --webpack",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --import tsx --conditions=react-server --test tests/*.test.ts",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "privacy:check": "node scripts/privacy-check.mjs",
+    "demo": "node --import tsx scripts/demo.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@assistant-ui/react": "^0.15.23",
+    "lucide-react": "^0.468.0",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "^0.0.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@playwright/test": "^1.56.0",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.0.0",
+    "prettier": "^3.9.9",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.71.0"
+  },
+  "type": "module"
+}

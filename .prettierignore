@@ -1,0 +1,8 @@
+node_modules
+.next
+.crouter
+.env*
+package-lock.json
+next-env.d.ts
+*.tsbuildinfo
+fixtures/project/.router-agent
