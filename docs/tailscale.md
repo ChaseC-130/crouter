@@ -29,6 +29,8 @@ Keep Next.js bound to `127.0.0.1`. Use **Tailscale Serve**, which proxies a loca
 
    Open the resulting HTTPS URL from a signed-in, allowlisted Tailnet device. Verify that it is labeled **Available within your tailnet**. Never run `tailscale funnel` for this app. Serve is a proxy, not a supervisor: keep `npm start` alive with your preferred OS service manager.
 
+After changing source code, run `npm run build` and restart the production server or its service manager. A running `next start` process keeps its loaded code even when a newer build exists on disk. Then reload the browser. **Host & usage** shows the app's build time so you can verify the served version. Tailscale Serve forwards the running server; it does not rebuild or restart it.
+
 When Tailnet mode is enabled, **every API request** requires an allowlisted `Tailscale-User-Login` header inserted by Serve. Tailscale removes spoofed incoming identity headers. The app also validates the exact HTTPS Origin for mutations, the custom same-origin request header, and the proxy Host. Missing identities, shared users outside the allowlist, tagged devices without user identity, and Funnel requests are rejected. A direct localhost browser won't get project API access in this mode; use the private HTTPS URL. Do not put Next on a LAN/Tailnet listening address, because a direct caller could forge proxy identity headers.
 
 The UI and browser application files contain no credentials, but all API data and actions belong to the single host user's workspace. This is private ingress access control, not multi-tenant authorization. Protect the server, its local OS account, and backups. Remove Tailnet configuration to return to strict loopback mode.

@@ -2107,6 +2107,11 @@ code {
 .theme-select select {
   margin-left: auto;
 }
+.topbar .theme-select {
+  padding: 0;
+  border-bottom: 0;
+  gap: 6px;
+}
 .theme-select select,
 .model-filters select {
   background: var(--surface);
@@ -2238,10 +2243,13 @@ code {
   grid-template-columns: 1fr;
 }
 .composer textarea {
-  min-height: 120px;
-  max-height: 280px;
+  min-height: 150px;
+  max-height: min(480px, 55dvh);
   resize: vertical;
   font-size: 14px;
+}
+.composer-expanded textarea {
+  min-height: min(300px, 40dvh);
 }
 .composer-tools {
   flex-wrap: wrap;
@@ -2300,7 +2308,11 @@ code {
     max-width: 190px;
   }
   .composer textarea {
-    min-height: 130px;
+    min-height: 150px;
+  }
+  .topbar .theme-select > span,
+  .topbar-right .local-pill {
+    display: none;
   }
 }
 

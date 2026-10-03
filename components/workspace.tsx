@@ -195,6 +195,7 @@ export function Workspace() {
     [input, setInput] = useState(""),
     [routingProject, setRoutingProject] = useState("auto"),
     [chatExpanded, setChatExpanded] = useState(false),
+    [composerExpanded, setComposerExpanded] = useState(false),
     [editingProject, setEditingProject] = useState<Project | null>(null),
     [description, setDescription] = useState(""),
     [provider, setProvider] = useState<Provider | "auto">("auto"),
@@ -685,6 +686,7 @@ export function Workspace() {
             <strong>{tab === "workspace" ? "Conversation" : "Tasks"}</strong>
           </div>
           <div className="topbar-right">
+            <ThemeSelect />
             <span className="local-pill">
               <span className="online-dot" />
               {snapshot?.config.demo ? "Synthetic demo" : "Local instance"}
@@ -953,7 +955,7 @@ export function Workspace() {
                 </div>
                 <div className="composer-area">
                   <form
-                    className="composer"
+                    className={`composer${composerExpanded ? " composer-expanded" : ""}`}
                     onSubmit={(e) => {
                       e.preventDefault();
                       void send();
@@ -966,7 +968,7 @@ export function Workspace() {
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       maxLength={4000}
-                      rows={4}
+                      rows={composerExpanded ? 10 : 5}
                       disabled={sending}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
@@ -1024,6 +1026,24 @@ export function Workspace() {
                       <span className="composer-hint">
                         ↵ Send · Shift ↵ New line
                       </span>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={
+                          composerExpanded
+                            ? "Shrink message box"
+                            : "Expand message box"
+                        }
+                        aria-pressed={composerExpanded}
+                        title="Adjust message box size; you can also drag its bottom edge"
+                        onClick={() => setComposerExpanded((value) => !value)}
+                      >
+                        {composerExpanded ? (
+                          <Minimize2 size={16} />
+                        ) : (
+                          <Maximize2 size={16} />
+                        )}
+                      </button>
                       <button
                         type="submit"
                         className="send-button"
@@ -1473,7 +1493,11 @@ export function Workspace() {
             Project state stays on your machine. {routingName} classifies turns
             remotely; provider workers use your existing CLI logins.
           </p>
-          <ThemeSelect />
+          <p className="usage-note">
+            App built:{" "}
+            {process.env.NEXT_PUBLIC_CROUTER_BUILD_TIME || "development"}.
+            Appearance is in the top toolbar.
+          </p>
           <div className="connection-row">
             <span className="brand-icon">
               <GitBranch size={18} />

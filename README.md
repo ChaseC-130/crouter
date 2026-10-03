@@ -1,6 +1,10 @@
 # crouter
 
-**Your projects, one conversation.** An MIT-licensed, local-first agent router built with Next.js, React, TypeScript, Tailwind CSS, and SQLite. JEV or Cloudflare Clef selects the project, provider, model, and effort from the host’s available profiles. A fresh, bounded project orchestrator handles each operation; Codex, Claude, Grok, Antigravity, and Muse workers retain their own sessions through their official local CLIs.
+**One chat for all your projects and AI coding tools.** Describe what you need in a single conversation: crouter routes the request to the right project, selects an enabled provider, model and effort, and keeps tasks, results and resumable sessions organized in one dashboard. Generic requests go to the General workspace. You can choose a project explicitly and optionally balance new work against remaining subscription usage.
+
+The intent is to stop juggling separate chats for every repository and CLI while keeping project context small, local and tied to its project. Each turn uses a fresh orchestrator; project Markdown stores task state, and the official Codex, Claude, Grok, Antigravity and Muse CLIs retain their worker sessions. The shared chat is a display, so each request must stand on its own. Workers currently produce read-only plans and reviews; implementation happens in the official interactive CLI.
+
+MIT-licensed and built with Next.js, React, TypeScript, Tailwind CSS and SQLite. JEV or Cloudflare Clef handles routing; provider authentication stays with your existing host CLIs.
 
 ## Quick start
 
@@ -185,7 +189,7 @@ Windows process-tree isolation is not implemented in this release; use WSL. Arch
 
 Contributions are welcome. Keep routing classifiers restricted to project/intent and advertised worker-profile decisions, orchestration bounded and disposable, state local and small, provider authentication owned by official CLIs, and tests synthetic. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Licensed under [MIT](LICENSE).
 
-Appearance follows your system theme by default. In **Host & usage**, choose **System**, **Light**, or **Dark**. Your override is saved in this browser and applied before the page paints.
+Appearance follows your system theme by default. Use **Appearance** in the top toolbar to choose **System**, **Light**, or **Dark**. Your override is saved in this browser and applied before the page paints. The message box starts at five lines; drag its bottom edge to resize it or select **Expand message box** for more room.
 
 Browser regression checks: with the dev server running, run `npm run test:ui` (or set `CROUTER_UI_URL` for another port). The checks use synthetic API responses and the installed Chrome browser; set `CROUTER_TEST_BROWSER` for another Playwright browser channel.
 

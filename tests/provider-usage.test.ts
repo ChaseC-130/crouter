@@ -126,9 +126,15 @@ test("Grok quota preserves percentages, full billing periods and unknown reading
     }),
     [],
   );
-  assert.equal(
+  assert.deepEqual(
     decodeGrokCredits({
       config: { onDemandCap: { val: 200 }, onDemandUsed: { val: 20 } },
+    }),
+    [],
+  );
+  assert.equal(
+    decodeGrokCredits({
+      config: { monthlyLimit: { val: 200 }, used: { val: 20 } },
     })[0].usedPercent,
     10,
   );
@@ -150,6 +156,32 @@ test("Grok quota preserves percentages, full billing periods and unknown reading
       },
     })[0].windowDurationMins,
     undefined,
+  );
+});
+test("Grok recognizes omitted zero usage only for an active unified allowance", () => {
+  const config = {
+    isUnifiedBillingUser: true,
+    currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start, end },
+    onDemandCap: {},
+    onDemandUsed: {},
+  };
+  const [window] = decodeGrokCredits({ config });
+  assert.equal(window.usedPercent, 0);
+  assert.equal(window.windowDurationMins, 10080);
+  for (const changed of [
+    { creditUsagePercent: null },
+    { isUnifiedBillingUser: false },
+    { currentPeriod: { type: "UNKNOWN", start, end } },
+    { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start, end: start } },
+  ])
+    assert.deepEqual(
+      decodeGrokCredits({ config: { ...config, ...changed } }),
+      [],
+    );
+  assert.equal(
+    decodeGrokCredits({ config: { monthlyLimit: { val: 200 }, used: {} } })[0]
+      .usedPercent,
+    0,
   );
 });
 test("Grok uses metadata-only billing and falls back to the fixed saved-login endpoint", async () => {
@@ -189,6 +221,9 @@ test("Grok uses metadata-only billing and falls back to the fixed saved-login en
   };
   await fakeGrok(billing);
   assert.equal((await grokUsage()).windows[0].usedPercent, 25);
+  assert.equal(reads, 1);
+  await fakeGrok(credits);
+  assert.equal((await grokUsage()).windows[0].usedPercent, 17);
   assert.equal(reads, 1);
 });
 test("Muse quota reads only the device login and discards minted keys and billing details", async () => {

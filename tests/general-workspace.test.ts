@@ -116,7 +116,7 @@ test("General is an explicit classifier choice; ambiguous projects still fail", 
     name: "Game",
     description: "Strategy game unit balancing",
   };
-  process.env.TYPESAFE_API_KEY = "synthetic-routing-placeholder";
+  process.env.TYPESAFE_API_KEY = "test-key";
   process.env.CROUTER_ROUTER = "jev";
   const payload = routingPayload("Write a birthday poem", [
     registered,

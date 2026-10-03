@@ -133,6 +133,15 @@ try {
   assert.ok(chat.width > dashboard.width * 1.6);
   const composer = page.getByLabel("Message to route");
   assert.ok((await composer.boundingBox()).height >= 120);
+  const initialHeight = (await composer.boundingBox()).height;
+  await page
+    .getByRole("button", { name: "Expand message box", exact: true })
+    .click();
+  assert.ok((await composer.boundingBox()).height > initialHeight);
+  await page
+    .getByRole("button", { name: "Shrink message box", exact: true })
+    .click();
+  assert.equal((await composer.boundingBox()).height, initialHeight);
   await page
     .getByRole("button", { name: "Expand conversation", exact: true })
     .click();

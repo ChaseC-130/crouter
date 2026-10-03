@@ -11,12 +11,19 @@ import { grokArgs } from "./grok";
 import { ProviderUsageError, usageJson } from "./usage-http";
 import type { UsageWindow } from "../types";
 
-const amount = z.object({ val: z.number().finite().nonnegative() });
+// Grok's protobuf JSON can encode a zero amount as {}.
+const amount = z.object({ val: z.number().finite().nonnegative().default(0) });
 const time = z.string().max(80).nullable().optional();
 const creditsSchema = z.object({
   config: z.object({
     creditUsagePercent: z.number().finite().nonnegative().nullable().optional(),
-    currentPeriod: z.object({ start: time, end: time }).nullable().optional(),
+    currentPeriod: z
+      .object({ type: z.string().optional(), start: time, end: time })
+      .nullable()
+      .optional(),
+    isUnifiedBillingUser: z.boolean().optional(),
+    monthlyLimit: amount.nullable().optional(),
+    used: amount.nullable().optional(),
     billingPeriodStart: time,
     billingPeriodEnd: time,
     onDemandUsed: amount.nullable().optional(),
@@ -50,13 +57,28 @@ function creditWindow(
 }
 export function decodeGrokCredits(raw: unknown): UsageWindow[] {
   const { config } = creditsSchema.parse(raw);
+  const currentEnd = resetAtSeconds(config.currentPeriod?.end, "iso");
+  const currentStart = resetAtSeconds(config.currentPeriod?.start, "iso");
+  // The official CLI maps an omitted percentage to zero. Limit that default
+  // to a recognized, active unified allowance; unknown/null data stays unknown.
+  const omittedZero =
+    config.creditUsagePercent === undefined &&
+    config.isUnifiedBillingUser === true &&
+    /^(USAGE_PERIOD_TYPE_WEEKLY|USAGE_PERIOD_TYPE_MONTHLY)$/.test(
+      config.currentPeriod?.type || "",
+    ) &&
+    currentStart &&
+    currentEnd &&
+    currentStart * 1000 <= Date.now() &&
+    currentEnd * 1000 > Date.now();
   const used =
     config.creditUsagePercent ??
-    (config.onDemandCap && config.onDemandCap.val > 0 && config.onDemandUsed
-      ? (config.onDemandUsed.val / config.onDemandCap.val) * 100
-      : undefined);
+    (config.monthlyLimit && config.monthlyLimit.val > 0 && config.used
+      ? (config.used.val / config.monthlyLimit.val) * 100
+      : omittedZero
+        ? 0
+        : undefined);
   if (used === undefined) return [];
-  const currentEnd = resetAtSeconds(config.currentPeriod?.end, "iso");
   return creditWindow(
     used,
     currentEnd ? config.currentPeriod?.start : config.billingPeriodStart,
@@ -141,9 +163,10 @@ export async function grokUsage(): Promise<{
       },
       8000,
     );
-    const windows = decodeGrokBilling(
-      await client.request("x.ai/billing", {}, 12000),
-    );
+    const raw = await client.request("x.ai/billing", {}, 12000);
+    const windows = creditsSchema.safeParse(raw).success
+      ? decodeGrokCredits(raw)
+      : decodeGrokBilling(raw);
     if (windows.length)
       return { windows, source: "Grok ACP · account billing" };
   } catch {
