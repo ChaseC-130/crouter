@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open, mkdir, lstat, realpath, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
+import { validSelection } from "./worker-selection.mjs";
 export const MAX_TASKS = 40;
 const maxState = 32768;
 const taskId = /^T-[a-f0-9]{8}$/;
@@ -80,6 +81,8 @@ export function taskFingerprint(task, body) {
     id: task.id,
     title: task.title,
     provider: task.provider,
+    model: task.model || "",
+    effort: task.effort || "",
     status: task.status,
     threadId: task.threadId || "",
     createdAt: task.createdAt,
@@ -101,6 +104,7 @@ export function decodeTasks(text) {
     if (
       !taskId.test(t.id) ||
       seen.has(t.id) ||
+      !validSelection(t) ||
       typeof t.title !== "string" ||
       t.title.length > 160 ||
       !["codex", "claude", "grok", "gemini", "agy", "muse"].includes(
@@ -113,6 +117,15 @@ export function decodeTasks(text) {
       (t.summary && (typeof t.summary !== "string" || t.summary.length > 600))
     )
       throw new Error("Invalid task index. Restore a valid tasks.md.");
+    if (t.provider === "gemini") {
+      t.provider = "agy";
+      delete t.threadId;
+      t.model = "default";
+      t.effort = "default";
+      if (t.status === "running") t.status = "blocked";
+      t.summary =
+        "Gemini CLI retired. Start a new agy worker session for this task.";
+    }
     seen.add(t.id);
   }
   return tasks;
@@ -179,10 +192,9 @@ export async function operate(input) {
       );
     if (
       typeof input.text !== "string" ||
+      !validSelection(input) ||
       input.text.length > 4000 ||
-      !["codex", "claude", "grok", "gemini", "agy", "muse"].includes(
-        input.provider,
-      )
+      !["codex", "claude", "grok", "agy", "muse"].includes(input.provider)
     )
       throw new Error("Invalid task.");
     const now = new Date().toISOString();
@@ -190,6 +202,8 @@ export async function operate(input) {
       id: `T-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
       title: input.text.replace(/\s+/g, " ").slice(0, 160),
       provider: input.provider,
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
       status: "queued",
       createdAt: now,
       updatedAt: now,
@@ -205,10 +219,11 @@ export async function operate(input) {
       path.join(state.dir, "tasks.md"),
       encodeTasks(state.tasks),
     );
-    await recordDecision(state, `Created ${task.id} for ${task.provider}.`);
+    const worker = `${task.provider}${task.model ? ` · ${task.model}` : ""}${task.effort ? ` · ${task.effort} effort` : ""}`;
+    await recordDecision(state, `Created ${task.id} for ${worker}.`);
     return {
       task,
-      message: `Created ${task.id}. It is queued for ${task.provider}; open the task to start a read-only worker.`,
+      message: `Created ${task.id}. It is queued for ${worker}; open the task to start a read-only worker.`,
     };
   }
   if (!taskId.test(input.taskId)) throw new Error("Invalid task ID.");

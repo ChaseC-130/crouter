@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --import tsx --conditions=react-server --test tests/*.test.ts",
+    "test:ui": "node scripts/ui-check.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
     "privacy:check": "node scripts/privacy-check.mjs",
     "demo": "node --import tsx scripts/demo.ts",

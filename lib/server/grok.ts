@@ -46,7 +46,12 @@ export async function runGrok(
     activeId = task.threadId;
   const client = new JsonLineClient(
     process.env.GROK_BIN || "grok",
-    grokArgs,
+    [
+      ...(task.model && task.model !== "default"
+        ? ["--model", task.model]
+        : []),
+      ...grokArgs,
+    ],
     childEnv(),
     root,
     (packet) => {
@@ -74,7 +79,7 @@ export async function runGrok(
     );
     if (!init.authMethods.some((m) => m.id === "cached_token"))
       throw new AppError(
-        "Grok has no supported local login. Run grok login in your terminal; no API-key fallback is used.",
+        "Grok’s existing host account is unavailable through its local adapter.",
         503,
       );
     await client.request("authenticate", {

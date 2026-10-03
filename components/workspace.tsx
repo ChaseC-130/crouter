@@ -17,6 +17,8 @@ import {
   LayoutDashboard,
   Loader2,
   Menu,
+  Maximize2,
+  Minimize2,
   MessageSquare,
   MoreHorizontal,
   Plus,
@@ -32,10 +34,18 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { ModelPicker } from "./model-picker";
+import { RoutingRules } from "./routing-rules";
+import { ThemeSelect } from "./theme-select";
 import { RouterMessages } from "./router-messages";
 import { providerNames } from "@/lib/types";
+import {
+  defaultRoutingPreferences,
+  applyRoutingPreference,
+} from "@/lib/routing-policy";
 import type {
   ProviderInfo,
+  Project,
   Snapshot,
   Task,
   TaskDetail,
@@ -43,6 +53,8 @@ import type {
   Approval,
   ApprovalAction,
   TaskStatus,
+  RoutingPreferences,
+  RoutingPreferenceChange,
 } from "@/lib/types";
 const statusNames: Record<TaskStatus, string> = {
   queued: "Queued",
@@ -57,12 +69,16 @@ const statusIcons: Record<TaskStatus, LucideIcon> = {
   blocked: AlertCircle,
 };
 const colors = ["green", "purple", "orange", "blue"];
-async function api<T>(url: string, body?: unknown): Promise<T> {
+async function api<T>(
+  url: string,
+  body?: unknown,
+  method: "POST" | "PATCH" = "POST",
+): Promise<T> {
   const response = await fetch(
     url,
     body
       ? {
-          method: "POST",
+          method,
           headers: {
             "Content-Type": "application/json",
             "X-Crouter-Request": "1",
@@ -105,9 +121,9 @@ function Modal({
       if (event.key === "Tab" && root) {
         const nodes = Array.from(
           root.querySelectorAll<HTMLElement>(
-            "button:not(:disabled), input, textarea, select, a[href]",
+            "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], summary",
           ),
-        );
+        ).filter((node) => node.getClientRects().length > 0);
         const first = nodes[0],
           last = nodes[nodes.length - 1];
         if (event.shiftKey && document.activeElement === first) {
@@ -177,7 +193,11 @@ export function Workspace() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [error, setError] = useState(""),
     [input, setInput] = useState(""),
-    [provider, setProvider] = useState<Provider>("codex"),
+    [routingProject, setRoutingProject] = useState("auto"),
+    [chatExpanded, setChatExpanded] = useState(false),
+    [editingProject, setEditingProject] = useState<Project | null>(null),
+    [description, setDescription] = useState(""),
+    [provider, setProvider] = useState<Provider | "auto">("auto"),
     [sending, setSending] = useState(false),
     [tab, setTab] = useState<"workspace" | "tasks">("workspace"),
     [projectFilter, setProjectFilter] = useState("all"),
@@ -193,17 +213,42 @@ export function Workspace() {
     [busyTask, setBusyTask] = useState(""),
     [name, setName] = useState(""),
     [projectPath, setProjectPath] = useState(""),
+    [resolvedPath, setResolvedPath] = useState(""),
+    [pathError, setPathError] = useState(""),
     [aliases, setAliases] = useState(""),
     [saving, setSaving] = useState(false),
     [notice, setNotice] = useState(""),
     [providerInfo, setProviderInfo] = useState<ProviderInfo[]>([]),
     [usageLoading, setUsageLoading] = useState(false);
+  const [preferencesSaving, setPreferencesSaving] = useState(false),
+    [preferencesError, setPreferencesError] = useState(""),
+    [reserveInput, setReserveDraft] = useState<string | null>(null);
+  const preferenceQueue = useRef(Promise.resolve());
+  const pendingPreferences = useRef(0);
+  const preferenceRevision = useRef(0);
+  const providerRequest = useRef(false);
   const bottom = useRef<HTMLDivElement>(null),
     textArea = useRef<HTMLTextAreaElement>(null);
   const latestMessageId = snapshot?.messages.at(-1)?.id;
   const refresh = useCallback(async () => {
+    const revision = preferenceRevision.current;
+    const wasSaving = pendingPreferences.current > 0;
     try {
-      setSnapshot(await api<Snapshot>("/api/snapshot"));
+      const next = await api<Snapshot>("/api/snapshot");
+      setSnapshot((current) =>
+        (wasSaving ||
+          pendingPreferences.current ||
+          revision !== preferenceRevision.current) &&
+        current
+          ? {
+              ...next,
+              config: {
+                ...next.config,
+                routingPreferences: current.config.routingPreferences,
+              },
+            }
+          : next,
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -231,14 +276,49 @@ export function Workspace() {
     const timer = setTimeout(() => setNotice(""), 5000);
     return () => clearTimeout(timer);
   }, [notice]);
+  useEffect(() => {
+    if (!adding || editingProject || !projectPath.trim()) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      api<{ path: string }>(
+        `/api/projects?${new URLSearchParams({ path: projectPath })}`,
+      )
+        .then((result) => {
+          if (active) {
+            setResolvedPath(result.path);
+            setPathError("");
+          }
+        })
+        .catch((e) => {
+          if (active) {
+            setResolvedPath("");
+            setPathError((e as Error).message);
+          }
+        });
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [adding, editingProject, projectPath]);
   const projects = snapshot?.projects || [],
     tasks = snapshot?.tasks || [],
     messages = snapshot?.messages || [];
+  const routingProvider = snapshot?.config.routingProvider;
+  const preferences =
+    snapshot?.config.routingPreferences || defaultRoutingPreferences;
+  const reserveDraft = reserveInput ?? String(preferences.minRemainingPercent);
+  const routingName =
+    routingProvider === "clef"
+      ? "Clef"
+      : routingProvider === "jev"
+        ? "JEV"
+        : "Router";
   const filtered = tasks.filter(
     (t) =>
       (projectFilter === "all" || t.projectId === projectFilter) &&
       (status === "all" || t.status === status) &&
-      `${t.title} ${t.id} ${t.projectName} ${t.provider}`
+      `${t.title} ${t.id} ${t.projectName} ${t.provider} ${t.model || ""} ${t.effort || ""}`
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
@@ -251,7 +331,11 @@ export function Workspace() {
     setSending(true);
     setInput("");
     try {
-      await api("/api/chat", { turn: text, provider });
+      await api("/api/chat", {
+        turn: text,
+        provider,
+        ...(routingProject !== "auto" ? { projectId: routingProject } : {}),
+      });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -260,24 +344,46 @@ export function Workspace() {
       textArea.current?.focus();
     }
   }
+  function showProjectEditor(project?: Project) {
+    setEditingProject(project || null);
+    setName(project?.name || "");
+    setProjectPath(project?.path || "");
+    setAliases(project?.aliases.join(", ") || "");
+    setDescription(project?.description || "");
+    setResolvedPath("");
+    setPathError("");
+    setError("");
+    setAdding(true);
+  }
   async function addProject(event: React.FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError("");
     try {
-      await api("/api/projects", {
-        name,
-        path: projectPath,
-        aliases: aliases
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-      });
+      await api(
+        "/api/projects",
+        {
+          name,
+          description,
+          ...(editingProject
+            ? { id: editingProject.id }
+            : { path: projectPath }),
+          aliases: aliases
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        },
+        editingProject ? "PATCH" : "POST",
+      );
       setAdding(false);
       setName("");
       setProjectPath("");
       setAliases("");
-      setNotice("Project registered. Its private state is excluded from Git.");
+      setNotice(
+        editingProject
+          ? "Project context saved. Routing uses it on your next request."
+          : "Project connected with context for routing.",
+      );
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -347,6 +453,8 @@ export function Workspace() {
       });
       setApproval(null);
       setDetail(null);
+      setAdding(false);
+      setEditingProject(null);
       setNotice("Approved action completed.");
       await refresh();
     } catch (e) {
@@ -356,7 +464,9 @@ export function Workspace() {
       setApproving(false);
     }
   }
-  async function loadProviders() {
+  const loadProviders = useCallback(async () => {
+    if (providerRequest.current) return;
+    providerRequest.current = true;
     setUsageLoading(true);
     try {
       const result = await api<{ providers: ProviderInfo[] }>("/api/providers");
@@ -364,12 +474,70 @@ export function Workspace() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      providerRequest.current = false;
       setUsageLoading(false);
     }
-  }
+  }, []);
+  useEffect(() => {
+    if (!settings) return;
+    const timer = setInterval(() => void loadProviders(), 60000);
+    return () => clearInterval(timer);
+  }, [settings, loadProviders]);
   function showSettings() {
+    setReserveDraft(null);
+    setPreferencesError("");
     setSettings(true);
     void loadProviders();
+  }
+  function savePreference(change: RoutingPreferenceChange) {
+    preferenceRevision.current += 1;
+    pendingPreferences.current += 1;
+    setPreferencesSaving(true);
+    setPreferencesError("");
+    setSnapshot((current) =>
+      current
+        ? {
+            ...current,
+            config: {
+              ...current.config,
+              routingPreferences: applyRoutingPreference(
+                current.config.routingPreferences,
+                change,
+              ),
+            },
+          }
+        : current,
+    );
+    // Queue writes so rapid mouse and keyboard selections preserve their order.
+    preferenceQueue.current = preferenceQueue.current.then(async () => {
+      let saved: RoutingPreferences | undefined;
+      try {
+        saved = (
+          await api<{ preferences: RoutingPreferences }>(
+            "/api/routing-preferences",
+            change,
+          )
+        ).preferences;
+        if (change.operation === "reserve") setReserveDraft(null);
+      } catch (e) {
+        setPreferencesError((e as Error).message);
+      } finally {
+        pendingPreferences.current -= 1;
+        if (!pendingPreferences.current) {
+          if (saved)
+            setSnapshot((current) =>
+              current
+                ? {
+                    ...current,
+                    config: { ...current.config, routingPreferences: saved! },
+                  }
+                : current,
+            );
+          else await refresh();
+          setPreferencesSaving(false);
+        }
+      }
+    });
   }
   const activeName = projects.find((p) => p.id === projectFilter)?.name;
   return (
@@ -429,7 +597,7 @@ export function Workspace() {
           <button
             className="icon-button"
             aria-label="Add project"
-            onClick={() => setAdding(true)}
+            onClick={() => showProjectEditor()}
           >
             <Plus size={15} />
           </button>
@@ -458,18 +626,18 @@ export function Workspace() {
               <span>{p.name}</span>
               <span>{tasks.filter((t) => t.projectId === p.id).length}</span>
             </button>
-            <button
-              className="project-remove icon-button"
-              aria-label={`Remove ${p.name}`}
-              onClick={() =>
-                void preview({ kind: "remove_project", projectId: p.id })
-              }
-            >
-              <MoreHorizontal size={14} />
-            </button>
+            {p.kind !== "general" && (
+              <button
+                className="project-settings icon-button"
+                aria-label={`Project settings for ${p.name}`}
+                onClick={() => showProjectEditor(p)}
+              >
+                <MoreHorizontal size={14} />
+              </button>
+            )}
           </div>
         ))}
-        <button className="add-project" onClick={() => setAdding(true)}>
+        <button className="add-project" onClick={() => showProjectEditor()}>
           <Plus size={15} />
           Add a project
         </button>
@@ -478,12 +646,12 @@ export function Workspace() {
             <ShieldCheck size={18} />
             <div>
               <strong>Local by design</strong>
-              <span>State stays with your projects.</span>
+              <span>State stays on your machine.</span>
             </div>
           </div>
           <button className="nav-item settings-nav" onClick={showSettings}>
             <Settings2 size={16} />
-            Setup & connections
+            Host & usage
             <ChevronRight size={14} />
           </button>
           <div className="sidebar-footer">
@@ -547,7 +715,7 @@ export function Workspace() {
             </div>
             <button
               className="secondary-button heading-add"
-              onClick={() => setAdding(true)}
+              onClick={() => showProjectEditor()}
             >
               <Plus size={15} />
               Add project
@@ -560,7 +728,7 @@ export function Workspace() {
               </div>
               <div>
                 <strong>
-                  {projects.length}
+                  {projects.filter((p) => p.kind !== "general").length}
                   <span>Projects connected</span>
                 </strong>
                 <small>One place to coordinate</small>
@@ -624,7 +792,32 @@ export function Workspace() {
               {notice}
             </div>
           )}
-          <div className={`work-grid ${tab === "tasks" ? "tasks-only" : ""}`}>
+          {tab === "workspace" &&
+            projects.some((p) => !p.description?.trim()) && (
+              <div className="project-context-prompt">
+                <span>
+                  <strong>Help {routingName} recognize your projects.</strong>{" "}
+                  Add context for automatic routing.
+                </span>
+                <div>
+                  {projects
+                    .filter((p) => !p.description?.trim())
+                    .map((p) => (
+                      <button
+                        className="text-button"
+                        key={p.id}
+                        onClick={() => showProjectEditor(p)}
+                      >
+                        Set up {p.name}
+                        <ArrowRight size={12} />
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+          <div
+            className={`work-grid ${tab === "tasks" ? "tasks-only" : chatExpanded ? "chat-expanded" : ""}`}
+          >
             {tab === "workspace" && (
               <section className="chat-panel panel" aria-label="Conversation">
                 <div className="panel-heading">
@@ -635,14 +828,32 @@ export function Workspace() {
                       All projects, one thread
                     </span>
                   </div>
-                  <button
-                    className="icon-button"
-                    aria-label="Clear chat history"
-                    disabled={!messages.length}
-                    onClick={() => void preview({ kind: "clear_history" })}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  <div className="chat-heading-actions">
+                    <button
+                      className="icon-button"
+                      aria-label={
+                        chatExpanded
+                          ? "Show task dashboard"
+                          : "Expand conversation"
+                      }
+                      aria-pressed={chatExpanded}
+                      onClick={() => setChatExpanded(!chatExpanded)}
+                    >
+                      {chatExpanded ? (
+                        <Minimize2 size={16} />
+                      ) : (
+                        <Maximize2 size={16} />
+                      )}
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="Clear chat history"
+                      disabled={!messages.length}
+                      onClick={() => void preview({ kind: "clear_history" })}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
                 <div className="chat-feed" aria-live="polite">
                   <div className="chat-day">
@@ -655,68 +866,71 @@ export function Workspace() {
                       : "A fresh start"}
                     <span />
                   </div>
-                  <div className="welcome-message">
-                    <span className="assistant-avatar">
-                      <GitBranch size={18} />
-                    </span>
-                    <div>
-                      <div className="message-meta">
-                        <strong>crouter</strong>
-                        <span>Your project coordinator</span>
-                      </div>
-                      <h3>A place for your next idea.</h3>
-                      <p>
-                        Tell me which project and what needs doing. I’ll check
-                        its status or create a task for Codex, Claude, or Grok.
-                      </p>
-                      <div className="route-illustration">
-                        <span>
-                          <MessageSquare size={13} />
-                          Your turn
-                        </span>
-                        <ArrowRight size={12} />
-                        <span className="jev-node">
-                          <GitBranch size={13} />
-                          JEV routes
-                        </span>
-                        <ArrowRight size={12} />
-                        <span>
-                          <Folder size={13} />
-                          Project state
-                        </span>
-                      </div>
-                      <div className="prompt-suggestions">
-                        <button
-                          disabled={!projects.length}
-                          onClick={() =>
-                            void send(
-                              `What is the status of ${projects[0]?.name}?`,
-                            )
-                          }
-                        >
-                          <Activity size={13} />
-                          Check project status
-                          <ArrowUp size={12} />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (projects.length) {
-                              setInput(
-                                `Create a task for ${projects[0].name}: `,
-                              );
-                              textArea.current?.focus();
-                            } else setAdding(true);
-                          }}
-                        >
-                          <Plus size={13} />
-                          {projects.length
-                            ? "Start something new"
-                            : "Connect your first project"}
-                          <ArrowUp size={12} />
-                        </button>
+                  {!messages.length && (
+                    <div className="welcome-message">
+                      <span className="assistant-avatar">
+                        <GitBranch size={18} />
+                      </span>
+                      <div>
+                        <div className="message-meta">
+                          <strong>crouter</strong>
+                          <span>Your project coordinator</span>
+                        </div>
+                        <h3>A place for your next idea.</h3>
+                        <p>
+                          Ask a question or describe what needs doing. I’ll
+                          match it to a project, or use General for everything
+                          else.
+                        </p>
+                        <div className="route-illustration">
+                          <span>
+                            <MessageSquare size={13} />
+                            Your turn
+                          </span>
+                          <ArrowRight size={12} />
+                          <span className="jev-node">
+                            <GitBranch size={13} />
+                            {routingName} routes
+                          </span>
+                          <ArrowRight size={12} />
+                          <span>
+                            <Folder size={13} />
+                            Project state
+                          </span>
+                        </div>
+                        <div className="prompt-suggestions">
+                          <button
+                            disabled={!projects.length}
+                            onClick={() =>
+                              void send(
+                                `What is the status of ${projects[0]?.name}?`,
+                              )
+                            }
+                          >
+                            <Activity size={13} />
+                            Check project status
+                            <ArrowUp size={12} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (projects.length) {
+                                setInput(
+                                  `Create a task for ${projects[0].name}: `,
+                                );
+                                textArea.current?.focus();
+                              } else showProjectEditor();
+                            }}
+                          >
+                            <Plus size={13} />
+                            {projects.length
+                              ? "Start something new"
+                              : "Connect your first project"}
+                            <ArrowUp size={12} />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                   <RouterMessages
                     messages={messages}
                     isRunning={sending}
@@ -748,16 +962,12 @@ export function Workspace() {
                     <textarea
                       ref={textArea}
                       aria-label="Message to route"
-                      placeholder={
-                        projects.length
-                          ? `Name a project and tell me what’s next…`
-                          : "Add a project to start routing work…"
-                      }
+                      placeholder="Ask anything or describe the work you want to do…"
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       maxLength={4000}
-                      rows={2}
-                      disabled={sending || !projects.length}
+                      rows={4}
+                      disabled={sending}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
@@ -766,17 +976,45 @@ export function Workspace() {
                       }}
                     />
                     <div className="composer-tools">
+                      <label className="provider-select composer-project">
+                        <Folder size={13} />
+                        <select
+                          aria-label="Project for this message"
+                          value={routingProject}
+                          onChange={(e) => setRoutingProject(e.target.value)}
+                        >
+                          <option value="auto">Automatic workspace</option>
+                          {projects.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={12} />
+                      </label>
                       <label className="provider-select">
-                        <ProviderMark provider={provider} />
+                        {provider === "auto" ? (
+                          <GitBranch size={13} />
+                        ) : (
+                          <ProviderMark provider={provider} />
+                        )}
                         <select
                           aria-label="Worker provider for new tasks"
                           value={provider}
                           onChange={(e) =>
-                            setProvider(e.target.value as Provider)
+                            setProvider(e.target.value as Provider | "auto")
                           }
                         >
+                          <option value="auto">Automatic model & effort</option>
                           {Object.entries(providerNames).map(([id, name]) => (
-                            <option key={id} value={id}>
+                            <option
+                              key={id}
+                              value={id}
+                              disabled={
+                                !snapshot?.config.demo &&
+                                !snapshot?.config[id as Provider]
+                              }
+                            >
                               {name}
                             </option>
                           ))}
@@ -790,7 +1028,7 @@ export function Workspace() {
                         type="submit"
                         className="send-button"
                         aria-label="Send message"
-                        disabled={sending || !input.trim() || !projects.length}
+                        disabled={sending || !input.trim()}
                       >
                         {sending ? (
                           <Loader2 size={17} className="spin" />
@@ -807,159 +1045,175 @@ export function Workspace() {
                 </div>
               </section>
             )}
-            <section className="tasks-panel panel" aria-label="Task dashboard">
-              <div className="panel-heading">
-                <div>
-                  <LayoutDashboard size={17} />
-                  <h2>Task dashboard</h2>
-                  <span className="count-chip">{tasks.length}</span>
-                </div>
-                <button
-                  className="icon-button"
-                  aria-label="Refresh tasks"
-                  onClick={() => void refresh()}
-                >
-                  <RotateCcw size={14} />
-                </button>
-              </div>
-              <div className="task-controls">
-                <div className="task-select-row">
-                  <label className="project-select">
-                    <Folder size={13} />
-                    <select
-                      aria-label="Filter tasks by project"
-                      value={projectFilter}
-                      onChange={(e) => setProjectFilter(e.target.value)}
-                    >
-                      <option value="all">All projects</option>
-                      {projects.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={12} />
-                  </label>
-                  <span className="results-count">{filtered.length} tasks</span>
-                </div>
-                <label className="search-field">
-                  <Search size={14} />
-                  <input
-                    aria-label="Search tasks"
-                    placeholder="Find a task…"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                  />
-                  <span>/</span>
-                </label>
-                <div
-                  className="filter-tabs"
-                  role="group"
-                  aria-label="Filter tasks by status"
-                >
-                  {["all", "queued", "running", "done", "blocked"].map((s) => (
-                    <button
-                      key={s}
-                      className={status === s ? "selected" : ""}
-                      onClick={() => setStatus(s)}
-                    >
-                      {s === "all" ? "All" : statusNames[s as TaskStatus]}
-                      {s === "all" && <span>{tasks.length}</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="task-list">
-                {!snapshot ? (
-                  <div className="empty-tasks">
-                    <Loader2 className="spin" />
-                    <p>Opening your local workspace…</p>
+            {(tab === "tasks" || !chatExpanded) && (
+              <section
+                className="tasks-panel panel"
+                aria-label="Task dashboard"
+              >
+                <div className="panel-heading">
+                  <div>
+                    <LayoutDashboard size={17} />
+                    <h2>Task dashboard</h2>
+                    <span className="count-chip">{tasks.length}</span>
                   </div>
-                ) : filtered.length ? (
-                  filtered.map((t) => (
-                    <button
-                      className="task-card"
-                      key={`${t.projectId}-${t.id}`}
-                      onClick={() => void openTask(t)}
-                    >
-                      <div className="task-card-top">
-                        <span
-                          className={`project-tag ${
-                            colors[
-                              Math.max(
-                                0,
-                                projects.findIndex((p) => p.id === t.projectId),
-                              ) % colors.length
-                            ]
-                          }`}
-                        >
-                          <span className="project-dot" />
-                          {t.projectName}
-                        </span>
-                        <Badge status={t.status} />
-                      </div>
-                      <h3>{t.title}</h3>
-                      <div className="task-card-bottom">
-                        <span>
-                          <ProviderMark provider={t.provider} />
-                          {providerNames[t.provider]}
-                          <span className="dot-separator">·</span>
-                          <span className="task-id">{t.id}</span>
-                        </span>
-                        <ChevronRight size={14} />
-                      </div>
-                      {t.threadId && (
-                        <div className="thread-hint">
-                          <GitBranch size={11} />
-                          Saved session · ready to resume
-                        </div>
-                      )}
-                    </button>
-                  ))
-                ) : (
-                  <div className="empty-tasks">
-                    <div className="empty-task-icon">
-                      <LayoutDashboard size={25} />
-                      <span>
-                        <Plus size={12} />
-                      </span>
-                    </div>
-                    <h3>
-                      {tasks.length
-                        ? "A clear view."
-                        : "Room for your next task."}
-                    </h3>
-                    <p>
-                      {tasks.length
-                        ? "No tasks match these filters. Try another project or status."
-                        : "Create a task in the conversation. Its progress and saved session will show up here."}
-                    </p>
-                    {tasks.length ? (
-                      <button
-                        className="text-button"
-                        onClick={() => {
-                          setStatus("all");
-                          setProjectFilter("all");
-                          setQuery("");
-                        }}
+                  <button
+                    className="icon-button"
+                    aria-label="Refresh tasks"
+                    onClick={() => void refresh()}
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                </div>
+                <div className="task-controls">
+                  <div className="task-select-row">
+                    <label className="project-select">
+                      <Folder size={13} />
+                      <select
+                        aria-label="Filter tasks by project"
+                        value={projectFilter}
+                        onChange={(e) => setProjectFilter(e.target.value)}
                       >
-                        Reset filters
-                        <ArrowRight size={12} />
-                      </button>
-                    ) : (
-                      <span className="example-prompt">
-                        “Create a task for {activeName || "my-project"}: review
-                        the API”
-                      </span>
+                        <option value="all">All projects</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown size={12} />
+                    </label>
+                    <span className="results-count">
+                      {filtered.length} tasks
+                    </span>
+                  </div>
+                  <label className="search-field">
+                    <Search size={14} />
+                    <input
+                      aria-label="Search tasks"
+                      placeholder="Find a task…"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                    <span>/</span>
+                  </label>
+                  <div
+                    className="filter-tabs"
+                    role="group"
+                    aria-label="Filter tasks by status"
+                  >
+                    {["all", "queued", "running", "done", "blocked"].map(
+                      (s) => (
+                        <button
+                          key={s}
+                          className={status === s ? "selected" : ""}
+                          onClick={() => setStatus(s)}
+                        >
+                          {s === "all" ? "All" : statusNames[s as TaskStatus]}
+                          {s === "all" && <span>{tasks.length}</span>}
+                        </button>
+                      ),
                     )}
                   </div>
-                )}
-              </div>
-              <div className="dashboard-footer">
-                <span className="online-dot" />
-                Updated from project Markdown<span>Auto-refresh on</span>
-              </div>
-            </section>
+                </div>
+                <div className="task-list">
+                  {!snapshot ? (
+                    <div className="empty-tasks">
+                      <Loader2 className="spin" />
+                      <p>Opening your local workspace…</p>
+                    </div>
+                  ) : filtered.length ? (
+                    filtered.map((t) => (
+                      <button
+                        className="task-card"
+                        key={`${t.projectId}-${t.id}`}
+                        onClick={() => void openTask(t)}
+                      >
+                        <div className="task-card-top">
+                          <span
+                            className={`project-tag ${
+                              colors[
+                                Math.max(
+                                  0,
+                                  projects.findIndex(
+                                    (p) => p.id === t.projectId,
+                                  ),
+                                ) % colors.length
+                              ]
+                            }`}
+                          >
+                            <span className="project-dot" />
+                            {t.projectName}
+                          </span>
+                          <Badge status={t.status} />
+                        </div>
+                        <h3>{t.title}</h3>
+                        <div className="task-card-bottom">
+                          <span>
+                            <ProviderMark provider={t.provider} />
+                            {providerNames[t.provider]}
+                            <span className="dot-separator">·</span>
+                            <span className="task-id">{t.id}</span>
+                          </span>
+                          <ChevronRight size={14} />
+                        </div>
+                        {t.threadId && (
+                          <div className="thread-hint">
+                            <GitBranch size={11} />
+                            Saved session · ready to resume
+                          </div>
+                        )}
+                        {t.model && (
+                          <div className="thread-hint">
+                            {t.model} · {t.effort || "default"} effort
+                          </div>
+                        )}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="empty-tasks">
+                      <div className="empty-task-icon">
+                        <LayoutDashboard size={25} />
+                        <span>
+                          <Plus size={12} />
+                        </span>
+                      </div>
+                      <h3>
+                        {tasks.length
+                          ? "A clear view."
+                          : "Room for your next task."}
+                      </h3>
+                      <p>
+                        {tasks.length
+                          ? "No tasks match these filters. Try another project or status."
+                          : "Create a task in the conversation. Its progress and saved session will show up here."}
+                      </p>
+                      {tasks.length ? (
+                        <button
+                          className="text-button"
+                          onClick={() => {
+                            setStatus("all");
+                            setProjectFilter("all");
+                            setQuery("");
+                          }}
+                        >
+                          Reset filters
+                          <ArrowRight size={12} />
+                        </button>
+                      ) : (
+                        <span className="example-prompt">
+                          “Create a task for {activeName || "my-project"}:
+                          review the API”
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="dashboard-footer">
+                  <span className="online-dot" />
+                  Updated from project Markdown<span>Auto-refresh on</span>
+                </div>
+              </section>
+            )}
           </div>
           <footer className="page-footer">
             <span>
@@ -971,11 +1225,14 @@ export function Workspace() {
         </div>
       </main>
       {adding && !approval && (
-        <Modal title="Connect a project" onClose={() => setAdding(false)}>
+        <Modal
+          title={editingProject ? "Project settings" : "Connect a project"}
+          onClose={() => setAdding(false)}
+        >
           <form onSubmit={addProject}>
             <p className="modal-description">
-              Give an existing local folder a name. Each project keeps its own
-              small agent state.
+              Describe the project so {routingName} can recognize requests about
+              it without needing its name in every message.
             </p>
             <label className="form-label">
               Project name
@@ -988,14 +1245,30 @@ export function Workspace() {
               />
             </label>
             <label className="form-label">
-              Absolute project path
+              Project path on host
               <input
+                readOnly={Boolean(editingProject)}
                 required
-                placeholder="/absolute/path/to/project"
+                placeholder="../my-project or /absolute/path/to/project"
                 value={projectPath}
-                onChange={(e) => setProjectPath(e.target.value)}
+                onChange={(e) => {
+                  setProjectPath(e.target.value);
+                  setResolvedPath("");
+                  setPathError("");
+                }}
               />
             </label>
+            <p className="usage-note">
+              Relative paths start at{" "}
+              <code>{snapshot?.config.projectPathBase}</code>. <code>~/</code>{" "}
+              uses the host’s home directory.
+            </p>
+            {resolvedPath && (
+              <p className="usage-note">
+                Resolved host folder: <code>{resolvedPath}</code>
+              </p>
+            )}
+            {pathError && <p className="inline-error">{pathError}</p>}
             <label className="form-label">
               Aliases <span>optional, separated by commas</span>
               <input
@@ -1004,16 +1277,49 @@ export function Workspace() {
                 onChange={(e) => setAliases(e.target.value)}
               />
             </label>
-            <div className="info-box">
-              <ShieldCheck size={17} />
-              <p>
-                Creates <code>.router-agent/</code> and adds its exclusion to
-                the project’s <code>.gitignore</code>. Paths and session IDs
-                stay in private local storage.
-              </p>
-            </div>
+            <label className="form-label">
+              Project context
+              <textarea
+                aria-label="Project context"
+                required
+                maxLength={1500}
+                rows={5}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What are you building? Describe its purpose, domain terms and typical work. For a strategy game: unit tiers, upgrades, combat roles and balance audits."
+              />
+            </label>
+            <p className="usage-note">
+              This description is sent to {routingName} with requests to help
+              choose a project. You can update it here as the project evolves.
+            </p>
+            {!editingProject && (
+              <div className="info-box">
+                <ShieldCheck size={17} />
+                <p>
+                  Creates <code>.router-agent/</code> and adds its exclusion to
+                  the project’s <code>.gitignore</code>. Paths and session IDs
+                  stay in private local storage.
+                </p>
+              </div>
+            )}
             {error && <p className="inline-error">{error}</p>}
             <div className="modal-actions">
+              {editingProject && (
+                <button
+                  type="button"
+                  className="text-button danger-text"
+                  onClick={() =>
+                    void preview({
+                      kind: "remove_project",
+                      projectId: editingProject.id,
+                    })
+                  }
+                >
+                  <Trash2 size={14} />
+                  Remove project
+                </button>
+              )}
               <button
                 type="button"
                 className="secondary-button"
@@ -1031,7 +1337,7 @@ export function Workspace() {
                 ) : (
                   <Plus size={15} />
                 )}
-                Connect project
+                {editingProject ? "Save project" : "Connect project"}
               </button>
             </div>
           </form>
@@ -1056,6 +1362,14 @@ export function Workspace() {
             <div>
               <span>Updated</span>
               <strong>{new Date(detail.updatedAt).toLocaleString()}</strong>
+            </div>
+            <div>
+              <span>Model</span>
+              <strong>{detail.model || "Host CLI default"}</strong>
+            </div>
+            <div>
+              <span>Effort</span>
+              <strong>{detail.effort || "Host CLI default"}</strong>
             </div>
           </div>
           {detail.threadId && (
@@ -1154,29 +1468,131 @@ export function Workspace() {
         </Modal>
       )}
       {settings && !approval && (
-        <Modal title="Setup & connections" onClose={() => setSettings(false)}>
+        <Modal title="Host & usage" wide onClose={() => setSettings(false)}>
           <p className="modal-description">
-            Everything runs on your machine. JEV classifies turns remotely;
-            provider workers use your existing CLI logins.
+            Project state stays on your machine. {routingName} classifies turns
+            remotely; provider workers use your existing CLI logins.
           </p>
+          <ThemeSelect />
           <div className="connection-row">
             <span className="brand-icon">
               <GitBranch size={18} />
             </span>
             <div>
-              <strong>JEV / TypeSafe</strong>
-              <span>Server-side project and intent routing</span>
+              <strong>
+                {routingName}
+                {routingProvider === "clef"
+                  ? " / Cloudflare"
+                  : routingProvider === "jev"
+                    ? " / TypeSafe"
+                    : " configuration"}
+              </strong>
+              <span>Project, model and effort decisions</span>
             </div>
             <span
-              className={`connection-state ${snapshot?.config.jevConfigured ? "connected" : ""}`}
+              className={`connection-state ${snapshot?.config.routingConfigured ? "connected" : ""}`}
             >
               {snapshot?.config.demo
                 ? "Demo"
-                : snapshot?.config.jevConfigured
+                : snapshot?.config.routingConfigured
                   ? "Configured"
-                  : "Needs key"}
+                  : "Needs setup"}
             </span>
           </div>
+          <section
+            className="routing-controls"
+            aria-label="Routing preferences"
+          >
+            <label className="routing-switch">
+              <input
+                type="checkbox"
+                checked={preferences.usageAware}
+                disabled={preferencesSaving || !snapshot}
+                onChange={(e) =>
+                  void savePreference({
+                    operation: "usage",
+                    enabled: e.target.checked,
+                  })
+                }
+              />
+              <span>
+                <strong>Route based on remaining usage</strong>
+                <small>
+                  Balance suitable models by remaining allowance and time until
+                  reset, while keeping a reserve in every reported window. Only
+                  fresh usage readings qualify.
+                </small>
+              </span>
+            </label>
+            {preferences.usageAware && (
+              <form
+                className="routing-reserve"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (reserveDraft.trim())
+                    void savePreference({
+                      operation: "reserve",
+                      minRemainingPercent: Number(reserveDraft),
+                    });
+                }}
+              >
+                <label>
+                  Minimum remaining usage{" "}
+                  <span>
+                    <input
+                      aria-label="Minimum remaining usage"
+                      type="number"
+                      required
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={reserveDraft}
+                      disabled={preferencesSaving}
+                      onChange={(e) => setReserveDraft(e.target.value)}
+                    />
+                    %
+                  </span>
+                </label>
+                <button
+                  type="submit"
+                  className="secondary-button"
+                  disabled={
+                    preferencesSaving ||
+                    !reserveDraft.trim() ||
+                    Number(reserveDraft) === preferences.minRemainingPercent
+                  }
+                >
+                  Save reserve
+                </button>
+              </form>
+            )}
+            <p className="usage-note">
+              {preferences.usageAware
+                ? `New tasks require at least ${preferences.minRemainingPercent}% remaining in each available window. CLIs with unavailable or stale usage are excluded.`
+                : "Usage is displayed below. Routing uses enabled models and task complexity."}
+            </p>
+            <ModelPicker
+              providers={providerInfo}
+              preferences={preferences}
+              loading={usageLoading}
+              ready={Boolean(snapshot)}
+              saving={preferencesSaving}
+              onChange={savePreference}
+              onRefresh={() => void loadProviders()}
+            />
+            <RoutingRules
+              providers={providerInfo}
+              preferences={preferences}
+              saving={preferencesSaving}
+              ready={Boolean(snapshot)}
+              onChange={savePreference}
+            />
+            {preferencesError && (
+              <p className="inline-error" role="alert">
+                {preferencesError}
+              </p>
+            )}
+          </section>
           <div className="quota-heading">
             <strong>Providers & usage</strong>
             <button
@@ -1206,7 +1622,7 @@ export function Workspace() {
                   className={`connection-state ${p.installed ? "connected" : ""}`}
                 >
                   {!p.runnable
-                    ? "Pending"
+                    ? "Unsupported host"
                     : snapshot?.config.demo
                       ? "Demo"
                       : p.installed
@@ -1214,11 +1630,29 @@ export function Workspace() {
                         : "Not detected"}
                 </span>
               </div>
+              {p.models.length > 0 && (
+                <details className="host-models">
+                  <summary>
+                    {p.models.length}{" "}
+                    {p.models.length === 1 ? "model" : "models"} available from
+                    host
+                  </summary>
+                  {p.models.map((m) => (
+                    <p className="usage-note" key={m.id}>
+                      <strong>{m.id}</strong>
+                      <br />
+                      Effort: {m.efforts.join(", ")}
+                    </p>
+                  ))}
+                </details>
+              )}
+              {p.modelsError && <p className="usage-note">{p.modelsError}</p>}
               {p.windows.map((w) => (
                 <div className="usage-window" key={w.label}>
                   <div>
                     <span>{w.label}</span>
                     <strong>
+                      {p.usageStale ? "Stale · " : ""}
                       {Math.round(100 - w.usedPercent)}% remaining
                     </strong>
                   </div>
@@ -1236,32 +1670,33 @@ export function Workspace() {
                 </div>
               ))}
               {p.usageError && <p className="usage-note">{p.usageError}</p>}
+              {p.usageSummary?.lifetimeTokens !== undefined && (
+                <p className="usage-note">
+                  Account reported lifetime tokens:{" "}
+                  {p.usageSummary.lifetimeTokens.toLocaleString()}
+                  {p.usageSummary.peakDailyTokens !== undefined
+                    ? ` · Peak day: ${p.usageSummary.peakDailyTokens.toLocaleString()}`
+                    : ""}
+                </p>
+              )}
               {p.usageSource && (
                 <p className="usage-note">
                   {p.usageSource}
                   {p.checkedAt ? ` · ${timeString(p.checkedAt)}` : ""}
                 </p>
               )}
-              {p.url && (
-                <a
-                  className="text-button"
-                  href={p.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Official provider page
-                  <ExternalLink size={11} />
-                </a>
-              )}
             </div>
           ))}
           <div className="info-box">
             <ShieldCheck size={17} />
             <p>
-              Configure <code>TYPESAFE_API_KEY</code> in your private{" "}
-              <code>.env.local</code>. Run <code>codex login</code> and{" "}
-              <code>claude auth login</code> in your terminal. CLI detection
-              does not verify your subscription or login.
+              Choose <code>CROUTER_ROUTER=jev</code> with{" "}
+              <code>TYPESAFE_API_KEY</code>, or <code>CROUTER_ROUTER=clef</code>
+              with <code>CLOUDFLARE_API_TOKEN</code> and{" "}
+              <code>CLOUDFLARE_ACCOUNT_ID</code>, in your private{" "}
+              <code>.env.local</code>. Restart crouter after changing these
+              settings. CLI detection does not verify your subscription or
+              login.
             </p>
           </div>
           <p className="modal-description">
@@ -1277,6 +1712,15 @@ export function Workspace() {
               href="https://docs.typesafe.ai/introduction/quickstart"
             >
               TypeSafe API docs
+              <ExternalLink size={13} />
+            </a>
+            <a
+              className="text-button"
+              target="_blank"
+              rel="noreferrer"
+              href="https://developers.cloudflare.com/workers-ai/models/clef/"
+            >
+              Cloudflare Clef docs
               <ExternalLink size={13} />
             </a>
             <button

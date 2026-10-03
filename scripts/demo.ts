@@ -47,7 +47,9 @@ for (const [index, spec] of specs.entries()) {
   const id = randomUUID();
   ids.push(id);
   db()
-    .prepare("INSERT INTO projects VALUES (?, ?, ?, ?, ?)")
+    .prepare(
+      "INSERT INTO projects (id, name, path, aliases, createdAt) VALUES (?, ?, ?, ?, ?)",
+    )
     .run(
       id,
       spec.name,

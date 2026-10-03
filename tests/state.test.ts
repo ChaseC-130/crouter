@@ -11,7 +11,12 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { operate, boundedRead, MAX_TASKS } from "../scripts/project-state.mjs";
+import {
+  operate,
+  boundedRead,
+  MAX_TASKS,
+  decodeTasks,
+} from "../scripts/project-state.mjs";
 async function fixture() {
   return realpath(await mkdtemp(path.join(os.tmpdir(), "crouter-state-")));
 }
@@ -24,6 +29,8 @@ test("a fresh orchestrator operation persists a resumable task and archives with
       operation: "create",
       text: "Review synthetic API edge cases",
       provider: "codex",
+      model: "synthetic-model",
+      effort: "high",
     });
     const id = created.task.id,
       threadId = "11111111-1111-4111-8111-111111111111";
@@ -37,6 +44,8 @@ test("a fresh orchestrator operation persists a resumable task and archives with
     });
     const state = await operate({ root, operation: "status" });
     assert.equal(state.tasks![0].threadId, threadId);
+    assert.equal(state.tasks![0].model, "synthetic-model");
+    assert.equal(state.tasks![0].effort, "high");
     const detail = await operate({ root, operation: "detail", taskId: id });
     assert.match(detail.body!, /synthetic plan/);
     await operate({ root, operation: "archive", taskId: id });
@@ -141,4 +150,26 @@ test("unknown operation does not mutate project state", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("retired Gemini tasks remain readable without reusing sessions in agy", () => {
+  const legacy = {
+    id: "T-77777777",
+    provider: "gemini",
+    title: "Synthetic",
+    model: "legacy-model",
+    effort: "high",
+    status: "running",
+    threadId: "77777777-7777-4777-8777-777777777777",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const [task] = decodeTasks(
+    "# Tasks\n\n```json\n" + JSON.stringify([legacy]) + "\n```\n",
+  );
+  assert.equal(task.provider, "agy");
+  assert.equal(task.threadId, undefined);
+  assert.equal(task.model, "default");
+  assert.equal(task.effort, "default");
+  assert.equal(task.status, "blocked");
 });

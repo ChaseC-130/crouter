@@ -1,25 +1,77 @@
-export type Provider = "codex" | "claude" | "grok" | "gemini" | "agy" | "muse";
+export type Provider = "codex" | "claude" | "grok" | "agy" | "muse";
 export const providerNames: Record<Provider, string> = {
   codex: "ChatGPT · Codex",
   claude: "Claude Code",
   grok: "Grok",
-  gemini: "Gemini CLI",
   agy: "Antigravity · agy",
   muse: "Muse Code",
 };
 export type TaskStatus = "queued" | "running" | "done" | "blocked";
 export type Intent = "status" | "create_task" | "unknown";
+export type RoutingProvider = "jev" | "clef";
+export type Effort =
+  | "default"
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
+export interface WorkerSelection {
+  provider: Provider;
+  model: string;
+  effort: Effort;
+}
+export interface ModelRef {
+  provider: Provider;
+  model: string;
+}
+export interface RoutingRule extends ModelRef {
+  when: string;
+}
+export interface RoutingPreferences {
+  enabledModels: ModelRef[];
+  usageAware: boolean;
+  minRemainingPercent: number;
+  instructions: string;
+  rules: RoutingRule[];
+}
+export type RoutingPreferenceChange =
+  | { operation: "model"; provider: Provider; model: string; enabled: boolean }
+  | { operation: "models"; models: ModelRef[]; enabled: boolean }
+  | { operation: "usage"; enabled: boolean }
+  | { operation: "rules"; instructions: string; rules: RoutingRule[] }
+  | { operation: "reserve"; minRemainingPercent: number };
+export interface WorkerModel {
+  id: string;
+  name: string;
+  description: string;
+  efforts: Effort[];
+  defaultEffort: Effort;
+}
+export interface WorkerCandidate extends WorkerSelection {
+  id: string;
+  description: string;
+  windows: UsageWindow[];
+  usageStale: boolean;
+}
 export interface Project {
   id: string;
+  kind?: "general";
   name: string;
   path: string;
   aliases: string[];
+  description?: string;
   createdAt: string;
 }
 export interface Task {
   id: string;
   title: string;
   provider: Provider;
+  model?: string;
+  effort?: Effort;
   status: TaskStatus;
   threadId?: string;
   createdAt: string;
@@ -43,6 +95,8 @@ export interface Routing {
   projectId: string;
   intent: Intent;
   confidence: number;
+  worker?: WorkerSelection;
+  workerConfidence?: number;
 }
 export interface Snapshot {
   projects: Project[];
@@ -50,12 +104,14 @@ export interface Snapshot {
   messages: Message[];
   warnings: string[];
   config: {
-    jevConfigured: boolean;
+    routingProvider: RoutingProvider | null;
+    routingConfigured: boolean;
     demo: boolean;
+    projectPathBase: string;
+    routingPreferences: RoutingPreferences;
     codex: boolean;
     claude: boolean;
     grok: boolean;
-    gemini: boolean;
     agy: boolean;
     muse: boolean;
   };
@@ -65,9 +121,12 @@ export interface UsageWindow {
   usedPercent: number;
   resetsAt?: number;
   windowDurationMins?: number;
+  model?: string;
+  /** Exact models sharing this quota, when supplied by a native adapter. */
+  models?: string[];
 }
 export interface ProviderInfo {
-  id: string;
+  id: Provider;
   name: string;
   runnable: boolean;
   installed: boolean;
@@ -77,6 +136,14 @@ export interface ProviderInfo {
   usageSource?: string;
   usageError?: string;
   checkedAt?: string;
+  models: WorkerModel[];
+  modelsError?: string;
+  usageStale?: boolean;
+  usageSummary?: {
+    lifetimeTokens?: number;
+    peakDailyTokens?: number;
+    currentStreakDays?: number;
+  };
 }
 export type ApprovalAction =
   | { kind: "archive_task"; projectId: string; taskId: string }

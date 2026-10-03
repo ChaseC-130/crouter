@@ -4,6 +4,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "./config";
 import { AppError } from "./errors";
+import { GENERAL_WORKSPACE_ID } from "../workspaces";
+import { generalWorkspace } from "./general-workspace";
 import type { Project, Message, ApprovalAction } from "../types";
 let database: DatabaseSync | undefined;
 export function db() {
@@ -16,7 +18,15 @@ export function db() {
     CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, path TEXT NOT NULL UNIQUE, aliases TEXT NOT NULL, createdAt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, createdAt TEXT NOT NULL, projectId TEXT, intent TEXT);
     CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, action TEXT NOT NULL, expires INTEGER NOT NULL, fingerprint TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS leases (key TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS leases (key TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+  const columns = database.prepare("PRAGMA table_info(projects)").all() as {
+    name: string;
+  }[];
+  if (!columns.some((column) => column.name === "description"))
+    database.exec(
+      "ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+    );
   return database;
 }
 export function projects(): Project[] {
@@ -27,6 +37,7 @@ export function projects(): Project[] {
   ).map((p) => ({ ...p, aliases: JSON.parse(p.aliases) }));
 }
 export function project(id: string) {
+  if (id === GENERAL_WORKSPACE_ID) return generalWorkspace();
   const p = projects().find((p) => p.id === id);
   if (!p) throw new AppError("Project is no longer registered.", 404);
   return p;

@@ -68,6 +68,7 @@ export function assertLocal(request: Request, mutation = false) {
 export async function readBody<T>(
   request: Request,
   schema: z.ZodType<T>,
+  maxBytes = 16384,
 ): Promise<T> {
   const reader = request.body?.getReader();
   if (!reader) throw new AppError("Request body is required.");
@@ -77,7 +78,7 @@ export async function readBody<T>(
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 16384) {
+    if (size > maxBytes) {
       await reader.cancel();
       throw new AppError("Request is too large.", 413);
     }

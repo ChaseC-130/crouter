@@ -54,7 +54,7 @@ const rules = [
   [/\/Users\/[a-zA-Z][a-zA-Z0-9._-]+\//, "personal macOS path"],
   [/\/home\/[a-zA-Z][a-zA-Z0-9._-]+\//, "personal Linux path"],
   [
-    /TYPESAFE_API_KEY\s*=\s*["']?(?![\s"'$#])[A-Za-z0-9_-]{12,}/,
+    /(?:TYPESAFE_API_KEY|CLOUDFLARE_(?:API|AUTH)_TOKEN)[\t ]*=[\t ]*["']?(?![\s"'$#])[A-Za-z0-9_-]{12,}/,
     "configured routing key",
   ],
 ];

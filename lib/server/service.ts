@@ -1,8 +1,7 @@
 import "server-only";
-import { realpath, lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, mkdir } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -18,9 +17,13 @@ import {
 } from "./db";
 import { orchestrate, taskDetail } from "./orchestrator";
 import { runProvider, available, childEnv } from "./providers";
-import { routeTurn } from "./jev";
+import { routeTurn, routingStatus } from "./routing";
 import { AppError } from "./errors";
-import { isDemo, workerTimeout, dataDir } from "./config";
+import { isDemo, workerTimeout } from "./config";
+import { projectPathBase, resolveProjectPath } from "./project-paths";
+import { providerCatalog, workerCandidates } from "./provider-catalog";
+import { routingPreferences } from "./routing-preferences";
+import { generalWorkspace, generalTaskDirectory } from "./general-workspace";
 import type {
   Project,
   Task,
@@ -30,10 +33,30 @@ import type {
   Approval,
 } from "../types";
 const exec = promisify(execFile);
+const workspaceInitializations = new Map<string, Promise<unknown>>();
+async function workspaceRegistry() {
+  const general = generalWorkspace();
+  let initialization = workspaceInitializations.get(general.path);
+  if (!initialization) {
+    initialization = (async () => {
+      await mkdir(general.path, { recursive: true, mode: 0o700 });
+      await withLease(`lifecycle:${general.id}`, () =>
+        orchestrate(general, { operation: "initialize" }),
+      );
+    })().catch((error) => {
+      workspaceInitializations.delete(general.path);
+      throw error;
+    });
+    workspaceInitializations.set(general.path, initialization);
+  }
+  await initialization;
+  return [...projects(), general];
+}
 export async function registerProject(
   name: string,
   requestedPath: string,
   aliases: string[],
+  description = "",
 ) {
   return withLease("registry", async () => {
     const registry = projects();
@@ -42,30 +65,14 @@ export async function registerProject(
     const labels = [name, ...aliases].map((v) => v.toLowerCase());
     if (
       new Set(labels).size !== labels.length ||
-      registry.some((p) =>
+      [...registry, generalWorkspace()].some((p) =>
         [p.name, ...p.aliases].some((label) =>
           labels.includes(label.toLowerCase()),
         ),
       )
     )
       throw new AppError("Project names and aliases must be unique.");
-    if (!path.isAbsolute(requestedPath))
-      throw new AppError(
-        "Use an absolute path to an existing project directory.",
-      );
-    let root: string;
-    try {
-      root = await realpath(requestedPath);
-      if (!(await lstat(root)).isDirectory()) throw new Error();
-    } catch {
-      throw new AppError(
-        "Project directory does not exist or is inaccessible.",
-      );
-    }
-    if ([path.parse(root).root, os.homedir(), dataDir()].includes(root))
-      throw new AppError(
-        "Choose a specific project folder, not a home, filesystem root, or runtime data directory.",
-      );
+    const root = await resolveProjectPath(requestedPath);
     if (registry.some((p) => p.path === root))
       throw new AppError("This path is already registered.");
     // Exclude private state in every project, including when registered from a parent Git repository.
@@ -111,17 +118,56 @@ export async function registerProject(
       name,
       path: root,
       aliases,
+      description,
       createdAt: new Date().toISOString(),
     };
     await orchestrate(p, { operation: "initialize" });
     db()
-      .prepare("INSERT INTO projects VALUES (?, ?, ?, ?, ?)")
-      .run(p.id, p.name, p.path, JSON.stringify(p.aliases), p.createdAt);
+      .prepare(
+        "INSERT INTO projects (id, name, path, aliases, createdAt, description) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        p.id,
+        p.name,
+        p.path,
+        JSON.stringify(p.aliases),
+        p.createdAt,
+        description,
+      );
     return { project: p };
   });
 }
+export async function updateProjectDetails(
+  id: string,
+  name: string,
+  aliases: string[],
+  description: string,
+) {
+  return withLease("registry", async () => {
+    if (project(id).kind === "general")
+      throw new AppError("The built-in General workspace cannot be edited.");
+    const labels = [name, ...aliases].map((label) => label.toLowerCase());
+    if (
+      new Set(labels).size !== labels.length ||
+      [...projects(), generalWorkspace()].some(
+        (p) =>
+          p.id !== id &&
+          [p.name, ...p.aliases].some((label) =>
+            labels.includes(label.toLowerCase()),
+          ),
+      )
+    )
+      throw new AppError("Project names and aliases must be unique.");
+    db()
+      .prepare(
+        "UPDATE projects SET name=?, aliases=?, description=? WHERE id=?",
+      )
+      .run(name, JSON.stringify(aliases), description, id);
+    return { project: project(id) };
+  });
+}
 export async function snapshot(): Promise<Snapshot> {
-  const registry = projects(),
+  const registry = await workspaceRegistry(),
     warnings: string[] = [];
   const lists = await Promise.all(
     registry.map(async (p) => {
@@ -140,13 +186,12 @@ export async function snapshot(): Promise<Snapshot> {
       }
     }),
   );
-  const [codex, claude, grok, gemini, agy, muse] = isDemo()
-    ? [false, false, false, false, false, false]
+  const [codex, claude, grok, agy, muse] = isDemo()
+    ? [false, false, false, false, false]
     : await Promise.all([
         available("codex"),
         available("claude"),
         available("grok"),
-        available("gemini"),
         available("agy"),
         available("muse"),
       ]);
@@ -156,28 +201,81 @@ export async function snapshot(): Promise<Snapshot> {
     messages: messages(),
     warnings,
     config: {
-      jevConfigured: Boolean(process.env.TYPESAFE_API_KEY),
+      ...routingStatus(),
       demo: isDemo(),
+      projectPathBase: projectPathBase(),
+      routingPreferences: routingPreferences(),
       codex,
       claude,
       grok,
-      gemini,
       agy,
       muse,
     },
   };
 }
-export async function chat(turn: string, provider: Provider) {
+export async function chat(
+  turn: string,
+  provider: Provider | "auto" = "auto",
+  projectId?: string,
+) {
   // Display history is deliberately never read here.
   addMessage("user", turn);
   try {
-    const route = await routeTurn(turn, projects());
+    const registry = await workspaceRegistry();
+    const catalog = isDemo() ? undefined : await providerCatalog();
+    const preferences = routingPreferences();
+    const candidates = catalog
+      ? workerCandidates(catalog, provider, Date.now(), preferences)
+      : undefined;
+    const route = await routeTurn(
+      turn,
+      registry,
+      candidates,
+      preferences.usageAware,
+      preferences,
+      projectId,
+    );
+    // A model disabled while the classifier was running must not become a new task.
+    if (
+      route.intent === "create_task" &&
+      JSON.stringify(routingPreferences()) !== JSON.stringify(preferences)
+    )
+      throw new AppError(
+        "Routing preferences or usage eligibility changed. Retry the turn with the current rules.",
+        409,
+      );
+    if (
+      route.intent === "create_task" &&
+      catalog &&
+      route.worker &&
+      !workerCandidates(
+        catalog,
+        provider,
+        Date.now(),
+        routingPreferences(),
+      ).some(
+        (c) =>
+          c.provider === route.worker!.provider &&
+          c.model === route.worker!.model &&
+          c.effort === route.worker!.effort,
+      )
+    )
+      throw new AppError(
+        "Routing preferences or usage eligibility changed. Retry the turn with the current enabled models.",
+        409,
+      );
     const p = project(route.projectId);
     const result = await orchestrate<{ message: string; task?: Task }>(
       p,
       route.intent === "status"
         ? { operation: "status" }
-        : { operation: "create", text: turn, provider },
+        : {
+            operation: "create",
+            text: turn,
+            ...(route.worker || {
+              provider: provider === "auto" ? "codex" : provider,
+            }),
+          },
     );
     const content = `${p.name} · ${result.message}`;
     addMessage("assistant", content, route);
@@ -215,9 +313,16 @@ export async function runTask(projectId: string, taskId: string) {
               threadId: task.threadId || randomUUID(),
               text: "Synthetic demo result: inspect the relevant files, outline the change, and verify the behavior with a focused test. No provider CLI was run and no repository files were edited.",
             }
-          : await runProvider(task.provider, p.path, task, async (threadId) => {
-              await orchestrate(p, { operation: "update", taskId, threadId });
-            });
+          : await runProvider(
+              task.provider,
+              p.kind === "general"
+                ? await generalTaskDirectory(task.id)
+                : p.path,
+              task,
+              async (threadId) => {
+                await orchestrate(p, { operation: "update", taskId, threadId });
+              },
+            );
         await orchestrate(p, {
           operation: "update",
           taskId,
@@ -285,6 +390,8 @@ async function actionState(action: ApprovalAction) {
     };
   const p = project(action.projectId);
   if (action.kind === "remove_project") {
+    if (p.kind === "general")
+      throw new AppError("The built-in General workspace cannot be removed.");
     const active = db()
       .prepare("SELECT key FROM leases WHERE key LIKE ? AND expires>?")
       .get(`worker:${p.id}:%`, Date.now());

@@ -29,6 +29,25 @@ test("privacy scan checks staged blobs, withholds values, and inspects fixtures"
     rejection();
     git("add", "source.txt");
     assert.match(scan().toString(), /Git index files/);
+    const cloudflareToken = "SYNTHETIC".repeat(4);
+    await writeFile(
+      path.join(cwd, "source.txt"),
+      `CLOUDFLARE_API_TOKEN=${cloudflareToken}\n`,
+    );
+    git("add", "source.txt");
+    assert.throws(scan, (error: unknown) => {
+      const stderr = (error as { stderr: Buffer }).stderr.toString();
+      return (
+        stderr.includes("configured routing key") &&
+        !stderr.includes(cloudflareToken)
+      );
+    });
+    await writeFile(
+      path.join(cwd, "source.txt"),
+      "CLOUDFLARE_API_TOKEN=\nCLOUDFLARE_ACCOUNT_ID=\nTYPESAFE_API_KEY=\nJEV_MODEL=jev-latest\n",
+    );
+    git("add", "source.txt");
+    assert.match(scan().toString(), /Git index files/);
     await mkdir(path.join(cwd, "fixtures"));
     await writeFile(path.join(cwd, "fixtures", "sample.txt"), fabricatedKey);
     git("add", "fixtures/sample.txt");

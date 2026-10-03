@@ -1,13 +1,19 @@
 import "server-only";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import type { TaskDetail, Task, Project, Provider } from "../types";
+import type { TaskDetail, Task, Project, Provider, Effort } from "../types";
 import { withLease } from "./db";
 import { AppError } from "./errors";
 import { childEnv } from "./providers";
 type Operation =
   | { operation: "initialize" | "status" }
-  | { operation: "create"; text: string; provider: Provider }
+  | {
+      operation: "create";
+      text: string;
+      provider: Provider;
+      model?: string;
+      effort?: Effort;
+    }
   | {
       operation: "detail" | "archive";
       taskId: string;

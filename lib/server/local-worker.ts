@@ -6,32 +6,21 @@ import { randomUUID } from "node:crypto";
 import { AppError } from "./errors";
 import type { Provider, TaskDetail } from "../types";
 import { childEnv, workerPrompt } from "./providers";
-type LocalProvider = Extract<Provider, "gemini" | "agy" | "muse">;
+type LocalProvider = Extract<Provider, "agy" | "muse">;
 
 export function localCommand(
   provider: LocalProvider,
   threadId?: string,
   promptFile?: string,
+  selection?: Pick<TaskDetail, "model" | "effort">,
 ) {
-  if (provider === "gemini")
-    return {
-      bin: process.env.GEMINI_BIN || "gemini",
-      args: [
-        "--prompt",
-        "Review the worker request supplied on stdin.",
-        "--output-format",
-        "stream-json",
-        "--approval-mode",
-        "plan",
-        "--extensions",
-        "none",
-        ...(threadId ? ["--resume", threadId] : []),
-      ],
-    };
   if (provider === "agy")
     return {
       bin: process.env.AGY_BIN || "agy",
       args: [
+        ...(selection?.model && selection.model !== "default"
+          ? ["--model", selection.model]
+          : []),
         "--input-format",
         "stream-json",
         "--output-format",
@@ -87,7 +76,7 @@ export async function prepareLocalWorker(
   // Plan prompts alone cannot enforce read-only access. No unsandboxed fallback.
   if (process.platform !== "darwin")
     throw new AppError(
-      "Gemini, Antigravity and Muse web workers currently require macOS sandbox-exec. Core Codex/Claude/Grok adapters support Linux.",
+      "Antigravity and Muse web workers currently require macOS sandbox-exec. Core Codex/Claude/Grok adapters support Linux.",
       503,
     );
   const temp = await realpath(
@@ -110,7 +99,7 @@ export async function prepareLocalWorker(
           ]
         : [path.join(os.homedir(), ".gemini")];
     const profile = readOnlyProfile(root, [temp, ...storage]);
-    const command = localCommand(provider, task.threadId, promptFile);
+    const command = localCommand(provider, task.threadId, promptFile, task);
     return {
       command: {
         bin: "/usr/bin/sandbox-exec",
@@ -121,9 +110,7 @@ export async function prepareLocalWorker(
         provider === "agy"
           ? JSON.stringify({ event: "user", message: { content: prompt } }) +
             "\n"
-          : provider === "muse"
-            ? ""
-            : prompt,
+          : "",
       cleanup: () => rm(temp, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -138,21 +125,9 @@ export function parseLocalEvent(
 ) {
   let threadId: unknown,
     text: unknown,
-    append = false,
     failed = false,
     completed = false;
-  if (provider === "gemini") {
-    if (event.type === "init") threadId = event.session_id;
-    if (event.type === "message" && event.role === "assistant") {
-      text = event.content;
-      append = event.delta === true;
-    }
-    if (event.type === "result") {
-      completed = event.status === "success";
-      failed = !completed;
-    }
-    if (event.type === "error") failed = true;
-  } else if (provider === "agy") {
+  if (provider === "agy") {
     if (event.event === "init") threadId = event.conversation_id;
     if (event.event === "result") {
       const result = event.result as
@@ -185,7 +160,7 @@ export function parseLocalEvent(
         ? threadId
         : undefined,
     text: typeof text === "string" ? text : undefined,
-    append,
+    append: false,
     failed,
     completed,
   };

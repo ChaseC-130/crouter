@@ -13,7 +13,7 @@ import {
 } from "../lib/server/service";
 import { db, messages, withLease, projects } from "../lib/server/db";
 import { taskDetail, orchestrate } from "../lib/server/orchestrator";
-import { routingPayload, routeTurn } from "../lib/server/jev";
+import { routingPayload, routeTurn } from "../lib/server/routing";
 import { assertLocal, readBody } from "../lib/server/security";
 import {
   childEnv,
@@ -193,7 +193,8 @@ test("registry isolation, display-only chat, and single-use stale-target approva
     operation: "status",
   });
   const id = state.tasks[0].id;
-  await assert.rejects(() => chat("do that again", "codex"), /explicitly/);
+  const generic = await chat("Explain how rainbows form", "codex");
+  assert.equal(generic.route.projectId, "00000000-0000-4000-8000-000000000001");
   assert.ok(messages().length >= 3);
   const action = { kind: "archive_task" as const, projectId: a.id, taskId: id };
   const stale = await previewAction(action);
@@ -227,10 +228,14 @@ test("registry isolation, display-only chat, and single-use stale-target approva
 });
 test("provider commands use saved sessions and never inherit API keys or bypass permissions", () => {
   process.env.TYPESAFE_API_KEY = testKey;
+  process.env.CLOUDFLARE_API_TOKEN = testKey;
+  process.env.CLOUDFLARE_ACCOUNT_ID = "a".repeat(32);
   process.env.OPENAI_API_KEY = testKey;
   process.env.ANTHROPIC_API_KEY = testKey;
   const env = childEnv();
   assert.equal(env.TYPESAFE_API_KEY, undefined);
+  assert.equal(env.CLOUDFLARE_API_TOKEN, undefined);
+  assert.equal(env.CLOUDFLARE_ACCOUNT_ID, undefined);
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
   const id = "11111111-1111-4111-8111-111111111111";
@@ -267,26 +272,37 @@ test("provider commands use saved sessions and never inherit API keys or bypass 
     true,
   );
   delete process.env.TYPESAFE_API_KEY;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
   delete process.env.OPENAI_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
 });
 test("a fake CLI records its session before completion, persists result, and resumes the same thread", async () => {
   const p = projects()[0];
-  process.env.CROUTER_DEMO = "1";
-  const created = await chat("Atlas task: synthetic worker plan", "codex");
-  delete process.env.CROUTER_DEMO;
+  const created = await orchestrate(p, {
+    operation: "create",
+    text: "Atlas task: synthetic worker plan",
+    provider: "codex",
+    model: "synthetic-model",
+    effort: "high",
+  });
   const fake = path.join(temp, "fake-codex");
+  process.env.CLOUDFLARE_API_TOKEN = testKey;
   await writeFile(
     fake,
-    `#!/usr/bin/env node\nif(process.env.TYPESAFE_API_KEY||process.env.OPENAI_API_KEY)process.exit(1);\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'22222222-2222-4222-8222-222222222222'}));\nconsole.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Synthetic review result'}}));\nconsole.log(JSON.stringify({type:'turn.completed'}));\n`,
+    `#!/usr/bin/env node\nif(process.env.TYPESAFE_API_KEY||process.env.CLOUDFLARE_API_TOKEN||process.env.OPENAI_API_KEY)process.exit(1);\nif(!process.argv.includes('synthetic-model')||!process.argv.includes('model_reasoning_effort="high"'))process.exit(2);\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'22222222-2222-4222-8222-222222222222'}));\nconsole.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Synthetic review result unit-test-placeholder'}}));\nconsole.log(JSON.stringify({type:'turn.completed'}));\n`,
     { mode: 0o700 },
   );
   process.env.CODEX_BIN = fake;
   await runTask(p.id, created.task!.id);
   const task = await taskDetail(p, created.task!.id);
   assert.equal(task.status, "done");
+  assert.equal(task.model, "synthetic-model");
+  assert.equal(task.effort, "high");
   assert.equal(task.threadId, "22222222-2222-4222-8222-222222222222");
   assert.match(task.body, /Synthetic review result/);
+  assert.ok(!task.body.includes(testKey));
+  assert.match(task.body, /\[redacted\]/);
   assert.ok(
     messages().some(
       (m) =>
@@ -321,6 +337,7 @@ test("a fake CLI records its session before completion, persists result, and res
     ),
   );
   delete process.env.CODEX_BIN;
+  delete process.env.CLOUDFLARE_API_TOKEN;
 });
 test("Claude stream adapter observes session IDs and final JSON without exposing tool events", async () => {
   const root = await folder("claude-fixture"),
@@ -409,6 +426,7 @@ test("Grok ACP uses cached local auth, denies client tool requests, captures and
     fake,
     `#!/usr/bin/env node
 const readline=require('node:readline');
+if(!process.argv.includes('--model')||!process.argv.includes('synthetic-grok'))process.exit(8);
 const send=p=>console.log(JSON.stringify({jsonrpc:'2.0',...p}));
 let prompt;
 readline.createInterface({input:process.stdin}).on('line',line=>{
@@ -439,6 +457,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     id: "T-11111111",
     title: "Synthetic Grok",
     provider: "grok" as const,
+    model: "synthetic-grok",
+    effort: "default" as const,
     status: "queued" as const,
     projectId: "synthetic",
     projectName: "Synthetic",
@@ -496,7 +516,7 @@ test("Codex quota read uses official app-server RPC and returns only validated w
 });
 test("Google and Muse adapters validate sessions, terminal status and their safe command flags", async () => {
   const id = "77777777-7777-4777-8777-777777777777";
-  for (const provider of ["gemini", "agy", "muse"] as const) {
+  for (const provider of ["agy", "muse"] as const) {
     const command = providerCommand(
       provider,
       id,
@@ -513,23 +533,6 @@ test("Google and Muse adapters validate sessions, terminal status and their safe
       ),
     );
   }
-  assert.equal(
-    parseProviderEvent("gemini", { type: "init", session_id: id }).threadId,
-    id,
-  );
-  assert.equal(
-    parseProviderEvent("gemini", {
-      type: "message",
-      role: "assistant",
-      content: "chunk",
-      delta: true,
-    }).append,
-    true,
-  );
-  assert.equal(
-    parseProviderEvent("gemini", { type: "result", status: "error" }).failed,
-    true,
-  );
   assert.equal(
     parseProviderEvent("agy", { event: "init", conversation_id: id }).threadId,
     id,
@@ -580,7 +583,7 @@ test("Google and Muse adapters validate sessions, terminal status and their safe
   );
 });
 test(
-  "native macOS workers deny project writes while preserving Gemini, Antigravity and Muse session results",
+  "native macOS workers deny project writes while preserving Antigravity and Muse session results",
   {
     skip:
       process.platform !== "darwin" ||
@@ -588,54 +591,37 @@ test(
   },
   async () => {
     const root = await folder("native-project");
-    for (const provider of ["gemini", "agy", "muse"] as const) {
+    for (const provider of ["agy", "muse"] as const) {
       const fake = path.join(temp, `fake-${provider}`),
         key = `${provider.toUpperCase()}_BIN`;
       const id = "77777777-7777-4777-8777-777777777777";
       const events =
-        provider === "gemini"
+        provider === "agy"
           ? [
-              { type: "init", session_id: id },
+              { event: "init", conversation_id: id },
               {
-                type: "message",
-                role: "assistant",
-                delta: true,
-                content: "Synthetic ",
+                event: "result",
+                result: {
+                  conversation_id: id,
+                  status: "SUCCESS",
+                  response: "Synthetic review",
+                },
               },
-              {
-                type: "message",
-                role: "assistant",
-                delta: true,
-                content: "review",
-              },
-              { type: "result", status: "success" },
             ]
-          : provider === "agy"
-            ? [
-                { event: "init", conversation_id: id },
-                {
-                  event: "result",
-                  result: {
-                    conversation_id: id,
-                    status: "SUCCESS",
-                    response: "Synthetic review",
-                  },
+          : [
+              {
+                schema_version: 1,
+                stream: { kind: "session", id },
+                payload: {
+                  kind: "run_terminal",
+                  terminal: "completed",
+                  text: "Synthetic review",
                 },
-              ]
-            : [
-                {
-                  schema_version: 1,
-                  stream: { kind: "session", id },
-                  payload: {
-                    kind: "run_terminal",
-                    terminal: "completed",
-                    text: "Synthetic review",
-                  },
-                },
-              ];
+              },
+            ];
       await writeFile(
         fake,
-        `#!/usr/bin/env node\nconst fs=require('node:fs');let denied=false;try{fs.writeFileSync('forbidden.txt','bad');}catch{denied=true;}if(!denied)process.exit(9);for(const event of ${JSON.stringify(events)})console.log(JSON.stringify(event));`,
+        `#!/usr/bin/env node\nconst fs=require('node:fs');if(${JSON.stringify(provider)}==='agy'&&!process.argv.includes('synthetic-agy-high'))process.exit(8);let denied=false;try{fs.writeFileSync('forbidden.txt','bad');}catch{denied=true;}if(!denied)process.exit(9);for(const event of ${JSON.stringify(events)})console.log(JSON.stringify(event));`,
         { mode: 0o700 },
       );
       process.env[key] = fake;
@@ -645,6 +631,8 @@ test(
           id: "T-77777777",
           title: "Synthetic",
           provider,
+          model: provider === "agy" ? "synthetic-agy-high" : "default",
+          effort: "default" as const,
           status: "queued" as const,
           projectId: "synthetic",
           projectName: "Synthetic",
