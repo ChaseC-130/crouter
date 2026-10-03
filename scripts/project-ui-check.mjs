@@ -42,6 +42,7 @@ const projects = [
   },
 ];
 const messages = [];
+const tasks = [];
 let lastUpdate;
 let lastChat;
 let lastCreate;
@@ -49,7 +50,7 @@ const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 const snapshot = () => ({
   projects,
-  tasks: [],
+  tasks,
   messages,
   warnings: [],
   config: {
@@ -255,7 +256,7 @@ try {
       .count(),
     0,
   );
-  assert.match(await page.locator(".stat").first().innerText(), /^0\s/);
+  assert.equal(await page.locator(".stats-row").count(), 0);
   assert.equal(await composer.isEnabled(), true);
   await composer.fill("Write a birthday poem");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -266,6 +267,110 @@ try {
   await page.screenshot({
     path: path.join(os.tmpdir(), "crouter-general-workspace.png"),
   });
+  // Long conversations and task lists must stay inside the window at ordinary
+  // laptop, phone and landscape sizes, including with the composer expanded.
+  messages.push(
+    ...Array.from({ length: 60 }, (_, i) => ({
+      id: `layout-message-${i}`,
+      role: i % 2 ? "assistant" : "user",
+      content: "Synthetic conversation content. ".repeat(20),
+      createdAt: new Date().toISOString(),
+    })),
+  );
+  tasks.push(
+    ...Array.from({ length: 30 }, (_, i) => ({
+      id: `T-layout-${i}`,
+      title: `Synthetic task ${i}`,
+      provider: "codex",
+      status: "queued",
+      projectId: generalId,
+      projectName: "General",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      summary: "A bounded task summary for layout testing.",
+    })),
+  );
+  await page.reload();
+  await page.locator(".task-card").first().waitFor();
+  const assertFits = async () => {
+    const layout = await page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+      scrollHeight: document.documentElement.scrollHeight,
+      panels: [...document.querySelectorAll(".chat-panel, .tasks-panel")]
+        .filter((el) => el.getClientRects().length)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom };
+        }),
+    }));
+    assert.ok(layout.scrollWidth <= layout.width, JSON.stringify(layout));
+    assert.ok(layout.scrollHeight <= layout.height, JSON.stringify(layout));
+    assert.ok(
+      layout.panels.every((p) => p.top >= 0 && p.bottom <= layout.height),
+      JSON.stringify(layout),
+    );
+    assert.equal(await page.locator(".stats-row").count(), 0);
+  };
+  for (const [width, height] of [
+    [1440, 900],
+    [1366, 768],
+    [1280, 600],
+    [390, 844],
+    [390, 667],
+    [844, 390],
+  ]) {
+    await page.setViewportSize({ width, height });
+    await assertFits();
+    assert.ok(
+      await page
+        .locator(".chat-feed")
+        .evaluate((el) => el.scrollHeight > el.clientHeight),
+    );
+    const bounds = await composer.boundingBox();
+    assert.ok(bounds.y + bounds.height <= height);
+    await page
+      .getByRole("button", { name: "Expand message box", exact: true })
+      .click();
+    await assertFits();
+    assert.ok(
+      await page.locator(".chat-feed").evaluate((el) => el.clientHeight > 30),
+    );
+    await page
+      .getByRole("button", { name: "Shrink message box", exact: true })
+      .click();
+    if (width <= 1000) {
+      await page
+        .getByRole("button", { name: "View tasks", exact: true })
+        .click();
+      assert.equal(
+        await page.getByRole("region", { name: "Task dashboard" }).isVisible(),
+        true,
+      );
+      await assertFits();
+      assert.ok(
+        await page
+          .locator(".task-list")
+          .evaluate((el) => el.scrollHeight > el.clientHeight),
+      );
+      await page
+        .getByRole("button", { name: "View conversation", exact: true })
+        .click();
+    }
+  }
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.getByLabel("Appearance", { exact: true }).selectOption("dark");
+  await page.screenshot({
+    path: path.join(os.tmpdir(), "crouter-window-layout.png"),
+  });
+  await page.getByRole("button", { name: /All tasks/ }).click();
+  await assertFits();
+  assert.ok(
+    await page
+      .locator(".task-list")
+      .evaluate((el) => el.scrollHeight > el.clientHeight),
+  );
   assert.deepEqual(errors, []);
   console.log(
     "Project UI checks passed: project setup/editing, explicit targets, generic requests without projects, and desktop/mobile layout.",

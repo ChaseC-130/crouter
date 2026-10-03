@@ -112,12 +112,12 @@ try {
   assert.equal(await theme.inputValue(), "system");
   const bg = () =>
     page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  assert.equal(await bg(), "rgb(20, 25, 20)");
+  assert.equal(await bg(), "rgb(11, 15, 23)");
   assert.equal(
     await page
       .locator(".modal")
       .evaluate((el) => getComputedStyle(el).backgroundColor),
-    "rgb(29, 36, 28)",
+    "rgb(21, 28, 40)",
   );
   assert.equal(
     await page.locator(".routing-model-option input:checked").count(),
@@ -217,7 +217,7 @@ try {
     path: path.join(os.tmpdir(), "crouter-routing-dark-settings.png"),
   });
   await page.reload();
-  assert.equal(await bg(), "rgb(20, 25, 20)");
+  assert.equal(await bg(), "rgb(11, 15, 23)");
   await page.getByRole("button", { name: "Host & usage" }).click();
   await first.waitFor();
   assert.equal(
@@ -235,7 +235,7 @@ try {
     path: path.join(os.tmpdir(), "crouter-routing-light-settings.png"),
   });
   await page.emulateMedia({ colorScheme: "dark" });
-  assert.equal(await bg(), "rgb(20, 25, 20)");
+  assert.equal(await bg(), "rgb(11, 15, 23)");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(
     () =>

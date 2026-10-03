@@ -189,7 +189,7 @@ Windows process-tree isolation is not implemented in this release; use WSL. Arch
 
 Contributions are welcome. Keep routing classifiers restricted to project/intent and advertised worker-profile decisions, orchestration bounded and disposable, state local and small, provider authentication owned by official CLIs, and tests synthetic. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Licensed under [MIT](LICENSE).
 
-Appearance follows your system theme by default. Use **Appearance** in the top toolbar to choose **System**, **Light**, or **Dark**. Your override is saved in this browser and applied before the page paints. The message box starts at five lines; drag its bottom edge to resize it or select **Expand message box** for more room.
+Appearance follows your system theme by default. Use **Appearance** in the top toolbar to choose **System**, **Light**, or **Dark**. Dark mode uses charcoal surfaces and blue accents. Your override is saved in this browser and applied before the page paints. The workspace fits the window, with conversation and task content scrolling inside their panels. On smaller screens, the **Tasks** / **Chat** button switches between those panels. The message box starts at five lines; drag its bottom edge to resize it or select **Expand message box** for more room.
 
 Browser regression checks: with the dev server running, run `npm run test:ui` (or set `CROUTER_UI_URL` for another port). The checks use synthetic API responses and the installed Chrome browser; set `CROUTER_TEST_BROWSER` for another Playwright browser channel.
 

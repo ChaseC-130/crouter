@@ -323,9 +323,6 @@ export function Workspace() {
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
-  const running = tasks.filter((t) => t.status === "running").length,
-    done = tasks.filter((t) => t.status === "done").length,
-    queued = tasks.filter((t) => t.status === "queued").length;
   async function send(text = input) {
     if (!text.trim() || sending) return;
     setError("");
@@ -603,45 +600,47 @@ export function Workspace() {
             <Plus size={15} />
           </button>
         </div>
-        <button
-          className={`project-item ${projectFilter === "all" ? "selected" : ""}`}
-          onClick={() => {
-            setProjectFilter("all");
-            setSidebarOpen(false);
-          }}
-        >
-          <span className="project-dot all-dot" />
-          <span>All projects</span>
-          <span>{tasks.length}</span>
-        </button>
-        {projects.map((p, i) => (
-          <div className="project-row" key={p.id}>
-            <button
-              className={`project-item ${projectFilter === p.id ? "selected" : ""}`}
-              onClick={() => {
-                setProjectFilter(p.id);
-                setSidebarOpen(false);
-              }}
-            >
-              <span className={`project-dot ${colors[i % colors.length]}`} />
-              <span>{p.name}</span>
-              <span>{tasks.filter((t) => t.projectId === p.id).length}</span>
-            </button>
-            {p.kind !== "general" && (
+        <div className="project-list" aria-label="Projects">
+          <button
+            className={`project-item ${projectFilter === "all" ? "selected" : ""}`}
+            onClick={() => {
+              setProjectFilter("all");
+              setSidebarOpen(false);
+            }}
+          >
+            <span className="project-dot all-dot" />
+            <span>All projects</span>
+            <span>{tasks.length}</span>
+          </button>
+          {projects.map((p, i) => (
+            <div className="project-row" key={p.id}>
               <button
-                className="project-settings icon-button"
-                aria-label={`Project settings for ${p.name}`}
-                onClick={() => showProjectEditor(p)}
+                className={`project-item ${projectFilter === p.id ? "selected" : ""}`}
+                onClick={() => {
+                  setProjectFilter(p.id);
+                  setSidebarOpen(false);
+                }}
               >
-                <MoreHorizontal size={14} />
+                <span className={`project-dot ${colors[i % colors.length]}`} />
+                <span>{p.name}</span>
+                <span>{tasks.filter((t) => t.projectId === p.id).length}</span>
               </button>
-            )}
-          </div>
-        ))}
-        <button className="add-project" onClick={() => showProjectEditor()}>
-          <Plus size={15} />
-          Add a project
-        </button>
+              {p.kind !== "general" && (
+                <button
+                  className="project-settings icon-button"
+                  aria-label={`Project settings for ${p.name}`}
+                  onClick={() => showProjectEditor(p)}
+                >
+                  <MoreHorizontal size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+          <button className="add-project" onClick={() => showProjectEditor()}>
+            <Plus size={15} />
+            Add a project
+          </button>
+        </div>
         <div className="sidebar-bottom">
           <div className="local-note">
             <ShieldCheck size={18} />
@@ -686,6 +685,22 @@ export function Workspace() {
             <strong>{tab === "workspace" ? "Conversation" : "Tasks"}</strong>
           </div>
           <div className="topbar-right">
+            <button
+              className="secondary-button compact-view-switch"
+              aria-label={
+                tab === "workspace" ? "View tasks" : "View conversation"
+              }
+              onClick={() =>
+                setTab(tab === "workspace" ? "tasks" : "workspace")
+              }
+            >
+              {tab === "workspace" ? (
+                <LayoutDashboard size={16} />
+              ) : (
+                <MessageSquare size={16} />
+              )}
+              {tab === "workspace" ? "Tasks" : "Chat"}
+            </button>
             <ThemeSelect />
             <span className="local-pill">
               <span className="online-dot" />
@@ -701,74 +716,9 @@ export function Workspace() {
           </div>
         </header>
         <div className="page-content">
-          <div className="page-heading">
-            <div>
-              <div className="eyebrow">YOUR COMMAND CENTER</div>
-              <h1>
-                {tab === "workspace"
-                  ? "One conversation. Every project."
-                  : "A little clarity for every task."}
-              </h1>
-              <p>
-                {tab === "workspace"
-                  ? "Route the work. Keep the context where it belongs."
-                  : "Track progress, inspect results, and pick up any saved session."}
-              </p>
-            </div>
-            <button
-              className="secondary-button heading-add"
-              onClick={() => showProjectEditor()}
-            >
-              <Plus size={15} />
-              Add project
-            </button>
-          </div>
-          <div className="stats-row">
-            <div className="stat">
-              <div className="stat-icon">
-                <Folder size={18} />
-              </div>
-              <div>
-                <strong>
-                  {projects.filter((p) => p.kind !== "general").length}
-                  <span>Projects connected</span>
-                </strong>
-                <small>One place to coordinate</small>
-              </div>
-            </div>
-            <div className="stat">
-              <div className="stat-icon stat-orange">
-                <Activity size={18} />
-              </div>
-              <div>
-                <strong>
-                  {running}
-                  <span>Workers running</span>
-                </strong>
-                <small>
-                  {running
-                    ? "Fresh work, saved sessions"
-                    : "Ready when you are"}
-                </small>
-              </div>
-            </div>
-            <div className="stat">
-              <div className="stat-icon stat-green">
-                <CheckCircle2 size={18} />
-              </div>
-              <div>
-                <strong>
-                  {done}
-                  <span>Tasks completed</span>
-                </strong>
-                <small>
-                  {queued
-                    ? `${queued} more in the queue`
-                    : "Small steps, real progress"}
-                </small>
-              </div>
-            </div>
-          </div>
+          <h1 className="sr-only">
+            {tab === "workspace" ? "Conversation" : "Tasks"}
+          </h1>
           {error && (
             <div role="alert" className="alert">
               <AlertCircle size={17} />
@@ -1235,13 +1185,6 @@ export function Workspace() {
               </section>
             )}
           </div>
-          <footer className="page-footer">
-            <span>
-              <GitBranch size={13} />
-              Small state. Fresh orchestration. Persistent workers.
-            </span>
-            <span>Built to be yours.</span>
-          </footer>
         </div>
       </main>
       {adding && !approval && (
